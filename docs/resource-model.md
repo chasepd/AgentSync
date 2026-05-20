@@ -1,0 +1,22 @@
+# Resource Model
+
+AgentSync uses a normalized model with common portable fields plus preserved
+native extension data. This lets it sync the parts that map cleanly while keeping
+agent-specific details visible and recoverable.
+
+## Resource Kinds
+
+- `RuleSet`: repository or user instructions such as `AGENTS.md` and `CLAUDE.md`.
+- `Skill`: `SKILL.md` folders and related files.
+- `Subagent`: named custom agents and role definitions.
+- `Hook`: lifecycle automation and event handlers.
+- `Command`: reusable command prompts or command actions.
+
+## Common Fields
+
+Every normalized resource has an id, kind, scope, source agent, native paths,
+portable fields, native extension fields, and diagnostics.
+
+Portable fields are eligible for cross-agent rendering. Native extension fields
+are keyed by source agent and preserved when a target cannot represent them.
+
