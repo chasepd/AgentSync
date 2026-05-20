@@ -1,0 +1,15 @@
+[workspace]
+members = [
+    "crates/agentsync-cli",
+    "crates/agentsync-core",
+]
+resolver = "2"
+
+[workspace.package]
+edition = "2021"
+license = "MIT"
+repository = "https://github.com/YOUR_ORG/agentsync"
+
+[workspace.lints.rust]
+unsafe_code = "forbid"
+
