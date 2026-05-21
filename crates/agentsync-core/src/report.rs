@@ -51,11 +51,7 @@ pub struct StatusReport {
 
 impl StatusReport {
     pub fn has_blocking_issues(&self) -> bool {
-        !self
-            .items
-            .iter()
-            .all(|item| item.state == DriftState::Clean)
-            || !self.diagnostics.is_empty()
+        self.items.iter().any(StatusItem::is_blocking) || !self.diagnostics.is_empty()
     }
 
     pub fn to_table(&self) -> String {
@@ -92,6 +88,18 @@ pub struct StatusItem {
     pub kind: crate::model::ResourceKind,
     pub state: DriftState,
     pub message: String,
+}
+
+impl StatusItem {
+    pub fn is_blocking(&self) -> bool {
+        matches!(
+            self.state,
+            DriftState::MissingTarget
+                | DriftState::StaleTarget
+                | DriftState::ChangedSource
+                | DriftState::Blocked
+        )
+    }
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
