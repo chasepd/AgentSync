@@ -51,7 +51,8 @@ pub struct StatusReport {
 
 impl StatusReport {
     pub fn has_blocking_issues(&self) -> bool {
-        self.items.iter().any(StatusItem::is_blocking) || !self.diagnostics.is_empty()
+        self.items.iter().any(StatusItem::is_blocking)
+            || self.diagnostics.iter().any(Diagnostic::is_blocking)
     }
 
     pub fn to_table(&self) -> String {
@@ -124,6 +125,14 @@ impl PlanReport {
         self.actions
             .iter()
             .any(|action| action.action == PlanActionKind::Block)
+    }
+
+    pub fn has_blocking_diagnostics(&self) -> bool {
+        self.diagnostics.iter().any(Diagnostic::is_blocking)
+    }
+
+    pub fn has_blocking_issues(&self) -> bool {
+        self.has_blocked_actions() || self.has_blocking_diagnostics()
     }
 
     pub fn to_text(&self) -> String {

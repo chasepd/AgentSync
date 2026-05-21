@@ -73,6 +73,15 @@ pub fn status_root(root: impl AsRef<Path>, scope: Scope) -> Result<StatusReport,
     let state = load_state(root)?;
     let mut items = Vec::new();
     for resource in &scan.normalized {
+        if resource.support == SupportLevel::Blocked {
+            items.push(StatusItem {
+                id: resource.id.clone(),
+                kind: resource.kind,
+                state: DriftState::Blocked,
+                message: "resource is blocked for MVP sync".to_string(),
+            });
+            continue;
+        }
         let checksum = normalized_checksum(resource)?;
         match state
             .resources
@@ -215,9 +224,9 @@ fn target_drifted(root: &Path, state: &StateFile, path: &Path) -> Result<bool, A
 
 pub fn write_plan(root: impl AsRef<Path>, report: &PlanReport) -> Result<(), AgentSyncError> {
     let root = root.as_ref();
-    if report.has_blocked_actions() {
+    if report.has_blocking_issues() {
         return Err(AgentSyncError::InvalidArgument(
-            "planned write contains blocked actions".to_string(),
+            "planned write contains blocking issues".to_string(),
         ));
     }
     let mut wrote_anything = false;
@@ -494,6 +503,30 @@ mod tests {
     }
 
     #[test]
+    fn blocked_behavioral_resource_is_blocking_status() {
+        let dir = tempdir().unwrap();
+        fs::create_dir_all(dir.path().join(".opencode/commands")).unwrap();
+        fs::write(dir.path().join(".opencode/commands/deploy.md"), "deploy\n").unwrap();
+
+        let status = status_root(dir.path(), Scope::Project).unwrap();
+
+        assert!(status.items.iter().any(|item| {
+            item.kind == ResourceKind::Command && item.state == DriftState::Blocked
+        }));
+        assert!(status.has_blocking_issues());
+    }
+
+    #[test]
+    fn info_diagnostics_are_not_blocking_status() {
+        let dir = tempdir().unwrap();
+
+        let status = status_root(dir.path(), Scope::User).unwrap();
+
+        assert!(!status.diagnostics.is_empty());
+        assert!(!status.has_blocking_issues());
+    }
+
+    #[test]
     fn scan_reports_builtin_capabilities() {
         let dir = tempdir().unwrap();
         let report = scan_root(dir.path(), Scope::Project).unwrap();
@@ -649,6 +682,24 @@ mod tests {
         assert_eq!(report.actions[0].action, PlanActionKind::Skip);
         write_plan(dir.path(), &report).unwrap();
 
+        assert!(!dir.path().join(".agentsync/state.json").exists());
+    }
+
+    #[test]
+    fn write_plan_rejects_blocking_diagnostics() {
+        let dir = tempdir().unwrap();
+        let report = PlanReport {
+            actions: Vec::new(),
+            diagnostics: vec![Diagnostic {
+                severity: DiagnosticSeverity::Error,
+                resource_id: None,
+                resource_kind: None,
+                agent: None,
+                message: "blocked".to_string(),
+            }],
+        };
+
+        assert!(write_plan(dir.path(), &report).is_err());
         assert!(!dir.path().join(".agentsync/state.json").exists());
     }
 }

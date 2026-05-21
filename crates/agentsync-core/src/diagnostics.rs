@@ -9,6 +9,12 @@ pub enum DiagnosticSeverity {
     Error,
 }
 
+impl DiagnosticSeverity {
+    pub fn is_blocking(&self) -> bool {
+        matches!(self, Self::Error)
+    }
+}
+
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct Diagnostic {
     pub severity: DiagnosticSeverity,
@@ -16,6 +22,12 @@ pub struct Diagnostic {
     pub resource_kind: Option<ResourceKind>,
     pub agent: Option<Agent>,
     pub message: String,
+}
+
+impl Diagnostic {
+    pub fn is_blocking(&self) -> bool {
+        self.severity.is_blocking()
+    }
 }
 
 #[derive(Debug, thiserror::Error)]
