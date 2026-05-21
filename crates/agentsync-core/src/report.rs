@@ -69,6 +69,9 @@ impl StatusReport {
                 item.state,
                 item.message
             ));
+            if let Some(command) = &item.suggested_command {
+                out.push_str(&format!("  suggested: {command}\n"));
+            }
         }
         for diagnostic in &self.diagnostics {
             out.push_str(&format!(
@@ -77,7 +80,7 @@ impl StatusReport {
             ));
         }
         if self.has_blocking_issues() {
-            out.push_str("Suggested action: run agentsync diff rules --from agents-md --to claude,cursor,opencode before writing.\n");
+            out.push_str("Suggested action: inspect the specific command above before writing.\n");
         }
         out
     }
@@ -89,6 +92,7 @@ pub struct StatusItem {
     pub kind: crate::model::ResourceKind,
     pub state: DriftState,
     pub message: String,
+    pub suggested_command: Option<String>,
 }
 
 impl StatusItem {

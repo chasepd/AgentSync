@@ -79,6 +79,7 @@ pub fn status_root(root: impl AsRef<Path>, scope: Scope) -> Result<StatusReport,
                 kind: resource.kind,
                 state: DriftState::Blocked,
                 message: "resource is blocked for MVP sync".to_string(),
+                suggested_command: None,
             });
             continue;
         }
@@ -93,6 +94,7 @@ pub fn status_root(root: impl AsRef<Path>, scope: Scope) -> Result<StatusReport,
                 kind: resource.kind,
                 state: DriftState::ChangedSource,
                 message: "source normalized content changed".to_string(),
+                suggested_command: suggested_diff_command(resource, entry),
             }),
             Some(entry) => {
                 let missing = entry
@@ -105,6 +107,7 @@ pub fn status_root(root: impl AsRef<Path>, scope: Scope) -> Result<StatusReport,
                         kind: resource.kind,
                         state: DriftState::MissingTarget,
                         message: format!("missing {}", target.path.display()),
+                        suggested_command: suggested_diff_command(resource, entry),
                     });
                     continue;
                 }
@@ -119,6 +122,7 @@ pub fn status_root(root: impl AsRef<Path>, scope: Scope) -> Result<StatusReport,
                         kind: resource.kind,
                         state: DriftState::StaleTarget,
                         message: format!("target drifted {}", target.path.display()),
+                        suggested_command: suggested_diff_command(resource, entry),
                     });
                 } else {
                     items.push(StatusItem {
@@ -126,6 +130,7 @@ pub fn status_root(root: impl AsRef<Path>, scope: Scope) -> Result<StatusReport,
                         kind: resource.kind,
                         state: DriftState::Clean,
                         message: "tracked and clean".to_string(),
+                        suggested_command: None,
                     });
                 }
             }
@@ -134,6 +139,7 @@ pub fn status_root(root: impl AsRef<Path>, scope: Scope) -> Result<StatusReport,
                 kind: resource.kind,
                 state: DriftState::Untracked,
                 message: "not present in .agentsync/state.json".to_string(),
+                suggested_command: None,
             }),
         }
     }
@@ -142,6 +148,37 @@ pub fn status_root(root: impl AsRef<Path>, scope: Scope) -> Result<StatusReport,
         items,
         diagnostics: scan.diagnostics,
     })
+}
+
+fn suggested_diff_command(resource: &NormalizedResource, entry: &StateResource) -> Option<String> {
+    if !matches!(resource.kind, ResourceKind::RuleSet | ResourceKind::Skill) {
+        return None;
+    }
+    if entry.targets.is_empty() {
+        return None;
+    }
+    let from = source_alias_for_resource(resource);
+    let to = entry
+        .targets
+        .iter()
+        .map(|target| target.agent.as_str())
+        .collect::<Vec<_>>()
+        .join(",");
+    Some(format!(
+        "agentsync diff {} --from {from} --to {to}",
+        resource.kind.as_str()
+    ))
+}
+
+fn source_alias_for_resource(resource: &NormalizedResource) -> &'static str {
+    if resource
+        .native_paths
+        .iter()
+        .any(|path| path == Path::new("AGENTS.md"))
+    {
+        return "agents-md";
+    }
+    resource.source_agent.as_str()
 }
 
 pub fn plan(

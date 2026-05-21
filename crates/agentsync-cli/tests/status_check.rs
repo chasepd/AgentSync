@@ -50,3 +50,81 @@ fn status_json_outputs_structured_report() {
     assert_eq!(json["scope"], "project");
     assert_eq!(json["items"][0]["state"], "untracked");
 }
+
+#[test]
+fn status_check_reports_missing_synced_target() {
+    let dir = tempdir().unwrap();
+    fs::write(dir.path().join("AGENTS.md"), "repo rules\n").unwrap();
+    sync_rules_to_claude(dir.path());
+    fs::remove_file(dir.path().join("CLAUDE.md")).unwrap();
+
+    let json = status_json_check_failure(dir.path());
+
+    assert_eq!(json["items"][0]["state"], "missing_target");
+    assert_eq!(
+        json["items"][0]["suggested_command"],
+        "agentsync diff rules --from agents-md --to claude"
+    );
+}
+
+#[test]
+fn status_check_reports_stale_synced_target() {
+    let dir = tempdir().unwrap();
+    fs::write(dir.path().join("AGENTS.md"), "repo rules\n").unwrap();
+    sync_rules_to_claude(dir.path());
+    fs::write(dir.path().join("CLAUDE.md"), "local target edit\n").unwrap();
+
+    let json = status_json_check_failure(dir.path());
+
+    assert_eq!(json["items"][0]["state"], "stale_target");
+    assert_eq!(
+        json["items"][0]["suggested_command"],
+        "agentsync diff rules --from agents-md --to claude"
+    );
+}
+
+#[test]
+fn status_check_reports_changed_source() {
+    let dir = tempdir().unwrap();
+    fs::write(dir.path().join("AGENTS.md"), "repo rules\n").unwrap();
+    sync_rules_to_claude(dir.path());
+    fs::write(dir.path().join("AGENTS.md"), "new repo rules\n").unwrap();
+
+    let json = status_json_check_failure(dir.path());
+
+    assert_eq!(json["items"][0]["state"], "changed_source");
+    assert_eq!(
+        json["items"][0]["suggested_command"],
+        "agentsync diff rules --from agents-md --to claude"
+    );
+}
+
+fn sync_rules_to_claude(dir: &std::path::Path) {
+    Command::cargo_bin("agentsync")
+        .unwrap()
+        .current_dir(dir)
+        .args([
+            "sync",
+            "rules",
+            "--from",
+            "agents-md",
+            "--to",
+            "claude",
+            "--write",
+        ])
+        .assert()
+        .success();
+}
+
+fn status_json_check_failure(dir: &std::path::Path) -> Value {
+    let output = Command::cargo_bin("agentsync")
+        .unwrap()
+        .current_dir(dir)
+        .args(["status", "--json", "--check"])
+        .assert()
+        .failure()
+        .get_output()
+        .stdout
+        .clone();
+    serde_json::from_slice(&output).unwrap()
+}
