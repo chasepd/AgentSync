@@ -1,5 +1,5 @@
 use crate::diagnostics::Diagnostic;
-use crate::model::{NativeResource, NormalizedResource, RenderedFile, Scope};
+use crate::model::{AdapterCapabilities, NativeResource, NormalizedResource, RenderedFile, Scope};
 use serde::{Deserialize, Serialize};
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -7,6 +7,7 @@ pub struct ScanReport {
     pub scope: Scope,
     pub resources: Vec<NativeResource>,
     pub normalized: Vec<NormalizedResource>,
+    pub capabilities: Vec<AdapterCapabilities>,
     pub diagnostics: Vec<Diagnostic>,
 }
 
@@ -16,6 +17,7 @@ impl ScanReport {
             scope,
             resources: Vec::new(),
             normalized: Vec::new(),
+            capabilities: Vec::new(),
             diagnostics: Vec::new(),
         }
     }
