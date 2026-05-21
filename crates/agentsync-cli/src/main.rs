@@ -26,6 +26,9 @@ enum Command {
 
         #[arg(long)]
         check: bool,
+
+        #[arg(long)]
+        json: bool,
     },
     /// Preview generated target changes.
     Diff {
@@ -36,6 +39,9 @@ enum Command {
 
         #[arg(long, value_delimiter = ',')]
         to: Vec<CliAgent>,
+
+        #[arg(long)]
+        json: bool,
     },
     /// Generate or update target formats. Writes require --write.
     Sync {
@@ -52,6 +58,9 @@ enum Command {
 
         #[arg(long)]
         write: bool,
+
+        #[arg(long)]
+        json: bool,
     },
     /// Create an AgentSync config file.
     Init,
@@ -156,30 +165,23 @@ fn main() -> Result<(), AgentSyncError> {
                 println!("{}", report.to_table());
             }
         }
-        Command::Status { scope, check } => {
+        Command::Status { scope, check, json } => {
             let scope: Scope = scope.into();
             let report = agentsync_core::status(scope)?;
-            println!("{}", report.to_table());
+            if json {
+                println!("{}", serde_json::to_string_pretty(&report)?);
+            } else {
+                println!("{}", report.to_table());
+            }
             if check && report.has_blocking_issues() {
                 std::process::exit(1);
             }
         }
-        Command::Diff { resource, from, to } => {
-            let targets = to.into_iter().map(Agent::from).collect::<Vec<_>>();
-            let report = agentsync_core::plan(
-                std::env::current_dir()?,
-                resource.into(),
-                from.into(),
-                &targets,
-            )?;
-            print!("{}", report.to_text());
-        }
-        Command::Sync {
+        Command::Diff {
             resource,
             from,
             to,
-            dry_run,
-            write,
+            json,
         } => {
             let targets = to.into_iter().map(Agent::from).collect::<Vec<_>>();
             let report = agentsync_core::plan(
@@ -188,10 +190,35 @@ fn main() -> Result<(), AgentSyncError> {
                 from.into(),
                 &targets,
             )?;
-            print!("{}", report.to_text());
+            if json {
+                println!("{}", serde_json::to_string_pretty(&report)?);
+            } else {
+                print!("{}", report.to_text());
+            }
+        }
+        Command::Sync {
+            resource,
+            from,
+            to,
+            dry_run,
+            write,
+            json,
+        } => {
+            let targets = to.into_iter().map(Agent::from).collect::<Vec<_>>();
+            let report = agentsync_core::plan(
+                std::env::current_dir()?,
+                resource.into(),
+                from.into(),
+                &targets,
+            )?;
+            if json {
+                println!("{}", serde_json::to_string_pretty(&report)?);
+            } else {
+                print!("{}", report.to_text());
+            }
             if write {
                 agentsync_core::write_plan(std::env::current_dir()?, &report)?;
-            } else if !dry_run {
+            } else if !dry_run && !json {
                 println!("No files written. Re-run with --write to apply changes.");
             }
         }
