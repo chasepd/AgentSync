@@ -72,6 +72,36 @@ fn sync_write_creates_target_and_state() {
 }
 
 #[test]
+fn sync_skills_write_creates_text_assets() {
+    let dir = tempdir().unwrap();
+    fs::create_dir_all(dir.path().join(".claude/skills/review/assets")).unwrap();
+    fs::write(
+        dir.path().join(".claude/skills/review/SKILL.md"),
+        "---\nname: review\n---\nBody\n",
+    )
+    .unwrap();
+    fs::write(
+        dir.path().join(".claude/skills/review/assets/guide.md"),
+        "asset body\n",
+    )
+    .unwrap();
+
+    Command::cargo_bin("agentsync")
+        .unwrap()
+        .current_dir(dir.path())
+        .args([
+            "sync", "skills", "--from", "claude", "--to", "codex", "--write",
+        ])
+        .assert()
+        .success();
+
+    assert_eq!(
+        fs::read_to_string(dir.path().join(".codex/skills/review/assets/guide.md")).unwrap(),
+        "asset body\n"
+    );
+}
+
+#[test]
 fn cursor_cli_alias_is_accepted_for_targets() {
     let dir = tempdir().unwrap();
     fs::write(dir.path().join("AGENTS.md"), "repo rules\n").unwrap();

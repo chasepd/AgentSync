@@ -159,10 +159,11 @@ pub fn plan(
     for source in sources {
         for target in targets {
             if source.kind == ResourceKind::Skill && source.support != SupportLevel::Portable {
+                diagnostics.extend(source.diagnostics.clone());
                 actions.push(block_action(
                     source,
                     *target,
-                    "skill contains blocked native behavior",
+                    "skill contains non-portable assets or behavior",
                 ));
                 continue;
             }
@@ -791,6 +792,77 @@ mod tests {
             .targets
             .iter()
             .any(|target| target.path == Path::new(".cursor/rules/agentsync.md")));
+    }
+
+    #[test]
+    fn skill_sync_writes_text_assets() {
+        let dir = tempdir().unwrap();
+        fs::create_dir_all(dir.path().join(".claude/skills/review/assets")).unwrap();
+        fs::write(
+            dir.path().join(".claude/skills/review/SKILL.md"),
+            "---\nname: review\ndescription: Review code\n---\nBody\n",
+        )
+        .unwrap();
+        fs::write(
+            dir.path().join(".claude/skills/review/assets/guide.md"),
+            "asset body\n",
+        )
+        .unwrap();
+
+        let report = plan(
+            dir.path(),
+            ResourceSelector::Skills,
+            SourceAlias::Claude,
+            &[Agent::Codex],
+        )
+        .unwrap();
+        assert!(report
+            .actions
+            .iter()
+            .any(|action| action.path == Path::new(".codex/skills/review/SKILL.md")));
+        assert!(report
+            .actions
+            .iter()
+            .any(|action| action.path == Path::new(".codex/skills/review/assets/guide.md")));
+
+        write_plan(dir.path(), &report).unwrap();
+
+        assert_eq!(
+            fs::read_to_string(dir.path().join(".codex/skills/review/assets/guide.md")).unwrap(),
+            "asset body\n"
+        );
+    }
+
+    #[test]
+    fn non_utf8_skill_assets_are_blocked() {
+        let dir = tempdir().unwrap();
+        fs::create_dir_all(dir.path().join(".claude/skills/review/assets")).unwrap();
+        fs::write(
+            dir.path().join(".claude/skills/review/SKILL.md"),
+            "---\nname: review\n---\nBody\n",
+        )
+        .unwrap();
+        fs::write(
+            dir.path().join(".claude/skills/review/assets/blob.bin"),
+            [0xff, 0xfe, 0xfd],
+        )
+        .unwrap();
+
+        let report = plan(
+            dir.path(),
+            ResourceSelector::Skills,
+            SourceAlias::Claude,
+            &[Agent::Codex],
+        )
+        .unwrap();
+
+        assert_eq!(report.actions[0].action, PlanActionKind::Block);
+        assert!(report
+            .diagnostics
+            .iter()
+            .any(|diagnostic| diagnostic.message.contains("not UTF-8")));
+        assert!(write_plan(dir.path(), &report).is_err());
+        assert!(!dir.path().join(".codex/skills/review/SKILL.md").exists());
     }
 
     #[test]
