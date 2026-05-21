@@ -1,6 +1,6 @@
 # AgentSync
 
-Keep AI coding-agent configuration in sync across Claude Code, Codex CLI, Cursor, OpenCode, and other `AGENTS.md`-compatible tools.
+Keep AI coding-agent configuration in sync across Claude Code, Codex CLI, Cursor CLI, OpenCode, and other `AGENTS.md`-compatible tools.
 
 AgentSync scans your personal and project-level agent configuration, shows what exists in each tool's native format, and helps you safely sync rules, subagents, hooks, skills, commands, and related automation across ecosystems.
 
@@ -14,7 +14,7 @@ Modern coding agents are useful, but their configuration formats are fragmented:
 
 - Claude Code uses `CLAUDE.md`, skills, hooks, subagents, and settings files.
 - Codex CLI uses `AGENTS.md`, skills, plugins, subagents, and Codex-specific customization.
-- Cursor has rules, skills, subagents, hooks, and CLI behavior.
+- Cursor CLI has rules, skills, subagents, hooks, and CLI behavior.
 - OpenCode uses `AGENTS.md`, agents, commands, skills, plugins, and OpenCode config.
 
 Teams end up with duplicated instructions, stale subagents, missing hooks, and subtle drift between tools.
@@ -38,12 +38,16 @@ AgentSync can:
 
 Initial target adapter coverage:
 
-| Resource | Claude Code | Codex CLI | Cursor | OpenCode |
+Cursor support means **Cursor CLI**. AgentSync targets files the CLI consumes,
+including the shared rules system in `.cursor/rules` and root-level
+`AGENTS.md` / `CLAUDE.md`; it does not automate Cursor IDE workspace behavior.
+
+| Resource | Claude Code | Codex CLI | Cursor CLI | OpenCode |
 | --- | --- | --- | --- | --- |
-| Rules / context | `CLAUDE.md`, `.claude/CLAUDE.md` | `AGENTS.md` | Cursor rules, `AGENTS.md` where supported | `AGENTS.md`, `opencode.json` instructions |
-| Subagents / custom agents | `.claude/agents/*.md` | Codex subagents | Cursor subagents | `.opencode/agents/*.md`, `opencode.json` agent config |
+| Rules / context | `CLAUDE.md`, `.claude/CLAUDE.md` | `AGENTS.md` | Cursor CLI rules, `AGENTS.md` where supported | `AGENTS.md`, `opencode.json` instructions |
+| Subagents / custom agents | `.claude/agents/*.md` | Codex subagents | Cursor CLI subagents | `.opencode/agents/*.md`, `opencode.json` agent config |
 | Skills | `.claude/skills/*/SKILL.md` | Agent Skills / `SKILL.md` folders | Agent Skills / `SKILL.md` folders | `.opencode/skills/*/SKILL.md`, `.agents/skills`, Claude-compatible skills |
-| Hooks / lifecycle automation | Claude Code hooks in settings | Codex-compatible automation, plugins, and external hooks where supported | Cursor hooks | OpenCode plugins and events |
+| Hooks / lifecycle automation | Claude Code hooks in settings | Codex-compatible automation, plugins, and external hooks where supported | Cursor CLI hooks | OpenCode plugins and events |
 | Commands | Claude skills / legacy commands | planned | planned | `.opencode/commands/*.md`, config commands |
 
 Support levels:
@@ -213,7 +217,7 @@ AgentSync understands two scopes:
 | Scope | Purpose | Examples |
 | --- | --- | --- |
 | `project` | Team-shared repo config | `AGENTS.md`, `CLAUDE.md`, `.claude/`, `.cursor/`, `.opencode/` |
-| `user` | Personal defaults | `~/.claude/`, `~/.codex/`, `~/.config/opencode/`, Cursor user-level config |
+| `user` | Personal defaults | `~/.claude/`, `~/.codex/`, `~/.config/opencode/`, Cursor CLI user-level config |
 
 Use `--scope project`, `--scope user`, or `--scope all` to control what gets scanned or synced.
 
@@ -331,7 +335,7 @@ Examples:
 - A Claude Code subagent written as Markdown frontmatter may not map perfectly to another tool's custom-agent schema.
 - A sandbox or permission policy in one tool may not have an equivalent in another.
 - Hook systems vary widely. Some are declarative config, while others are executable plugin code.
-- Cursor rules and `AGENTS.md` instructions may overlap but are not always equivalent.
+- Cursor CLI rules and `AGENTS.md` instructions may overlap but are not always equivalent.
 - Skills are most portable when they follow the open `SKILL.md` pattern and avoid agent-specific frontmatter.
 
 When a conversion is lossy, AgentSync marks it clearly:
@@ -488,7 +492,7 @@ Review generated hooks and plugins before enabling them.
 
 ## Roadmap
 
-- [ ] Read-only scanner for Claude Code, Codex CLI, Cursor, and OpenCode.
+- [ ] Read-only scanner for Claude Code, Codex CLI, Cursor CLI, and OpenCode.
 - [ ] Rules/context sync.
 - [ ] Skills sync using `SKILL.md`.
 - [ ] Claude Code subagent to Codex/OpenCode conversion.

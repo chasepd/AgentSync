@@ -77,6 +77,7 @@ enum CliSource {
     AgentsMd,
     Codex,
     Claude,
+    #[value(name = "cursor", alias = "cursor-cli")]
     Cursor,
     Opencode,
 }
@@ -85,6 +86,7 @@ enum CliSource {
 enum CliAgent {
     Codex,
     Claude,
+    #[value(name = "cursor", alias = "cursor-cli")]
     Cursor,
     Opencode,
 }
@@ -124,7 +126,7 @@ impl From<CliSource> for SourceAlias {
             CliSource::AgentsMd => Self::AgentsMd,
             CliSource::Codex => Self::Codex,
             CliSource::Claude => Self::Claude,
-            CliSource::Cursor => Self::Cursor,
+            CliSource::Cursor => Self::CursorCli,
             CliSource::Opencode => Self::OpenCode,
         }
     }
@@ -135,7 +137,7 @@ impl From<CliAgent> for Agent {
         match value {
             CliAgent::Codex => Self::Codex,
             CliAgent::Claude => Self::Claude,
-            CliAgent::Cursor => Self::Cursor,
+            CliAgent::Cursor => Self::CursorCli,
             CliAgent::Opencode => Self::OpenCode,
         }
     }

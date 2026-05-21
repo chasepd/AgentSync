@@ -69,3 +69,16 @@ fn sync_write_creates_target_and_state() {
     );
     assert!(dir.path().join(".agentsync/state.json").exists());
 }
+
+#[test]
+fn cursor_cli_alias_is_accepted_for_targets() {
+    let dir = tempdir().unwrap();
+    fs::write(dir.path().join("AGENTS.md"), "repo rules\n").unwrap();
+
+    Command::cargo_bin("agentsync")
+        .unwrap()
+        .current_dir(dir.path())
+        .args(["diff", "rules", "--from", "agents-md", "--to", "cursor-cli"])
+        .assert()
+        .success();
+}

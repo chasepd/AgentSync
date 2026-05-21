@@ -38,7 +38,7 @@ pub fn built_in_adapters() -> Vec<Box<dyn AgentAdapter>> {
     vec![
         Box::new(CodexAdapter),
         Box::new(ClaudeAdapter),
-        Box::new(CursorAdapter),
+        Box::new(CursorCliAdapter),
         Box::new(OpenCodeAdapter),
     ]
 }
@@ -151,15 +151,15 @@ impl AgentAdapter for ClaudeAdapter {
 }
 
 #[derive(Debug)]
-pub struct CursorAdapter;
+pub struct CursorCliAdapter;
 
-impl AgentAdapter for CursorAdapter {
+impl AgentAdapter for CursorCliAdapter {
     fn agent(&self) -> Agent {
-        Agent::Cursor
+        Agent::CursorCli
     }
 
     fn capabilities(&self) -> AdapterCapabilities {
-        portable_capabilities(Agent::Cursor)
+        portable_capabilities(Agent::CursorCli)
     }
 
     fn discover(&self, root: &Path, scope: Scope) -> Result<Vec<NativeResource>, AgentSyncError> {
@@ -197,7 +197,7 @@ impl AgentAdapter for CursorAdapter {
         &self,
         resource: &NormalizedResource,
     ) -> Result<(Vec<RenderedFile>, Vec<Diagnostic>), AgentSyncError> {
-        render_native(resource, Agent::Cursor)
+        render_native(resource, Agent::CursorCli)
     }
 }
 
@@ -517,7 +517,7 @@ fn render_rules(
     let path = match target {
         Agent::Codex | Agent::OpenCode => PathBuf::from("AGENTS.md"),
         Agent::Claude => PathBuf::from("CLAUDE.md"),
-        Agent::Cursor => PathBuf::from(".cursor/rules/agentsync.md"),
+        Agent::CursorCli => PathBuf::from(".cursor/rules/agentsync.md"),
     };
     Ok((
         vec![RenderedFile {
@@ -539,7 +539,7 @@ fn render_skill(
     let base = match target {
         Agent::Codex => PathBuf::from(".codex/skills"),
         Agent::Claude => PathBuf::from(".claude/skills"),
-        Agent::Cursor => PathBuf::from(".cursor/skills"),
+        Agent::CursorCli => PathBuf::from(".cursor/skills"),
         Agent::OpenCode => PathBuf::from(".opencode/skills"),
     };
     let path = base.join(&skill.name).join("SKILL.md");
@@ -624,7 +624,7 @@ mod tests {
             support: SupportLevel::Portable,
         };
 
-        let (files, diagnostics) = CursorAdapter.render(&resource).unwrap();
+        let (files, diagnostics) = CursorCliAdapter.render(&resource).unwrap();
 
         assert!(diagnostics.is_empty());
         assert_eq!(files[0].path, Path::new(".cursor/rules/agentsync.md"));

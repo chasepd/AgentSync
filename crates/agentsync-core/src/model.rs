@@ -16,7 +16,8 @@ pub enum Scope {
 pub enum Agent {
     Claude,
     Codex,
-    Cursor,
+    #[serde(rename = "cursor")]
+    CursorCli,
     #[serde(rename = "opencode")]
     OpenCode,
 }
@@ -26,8 +27,17 @@ impl Agent {
         match self {
             Self::Claude => "claude",
             Self::Codex => "codex",
-            Self::Cursor => "cursor",
+            Self::CursorCli => "cursor",
             Self::OpenCode => "opencode",
+        }
+    }
+
+    pub fn display_name(self) -> &'static str {
+        match self {
+            Self::Claude => "Claude Code",
+            Self::Codex => "Codex CLI",
+            Self::CursorCli => "Cursor CLI",
+            Self::OpenCode => "OpenCode",
         }
     }
 }
@@ -125,6 +135,7 @@ pub enum SourceAlias {
     AgentsMd,
     Codex,
     Claude,
-    Cursor,
+    #[serde(rename = "cursor")]
+    CursorCli,
     OpenCode,
 }

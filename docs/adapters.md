@@ -16,7 +16,8 @@ Each adapter provides:
 
 - Claude Code: `CLAUDE.md`, `.claude/agents`, `.claude/skills`, settings hooks.
 - Codex CLI: `AGENTS.md`, skills, plugins, subagents, Codex customization.
-- Cursor: rules, skills, subagents, hooks, and supported `AGENTS.md` behavior.
+- Cursor CLI: CLI-consumed rules in `.cursor/rules`, root `AGENTS.md` /
+  `CLAUDE.md` where supported, and portable skills. This target is not Cursor
+  IDE workspace automation.
 - OpenCode: `AGENTS.md`, `.opencode/agents`, `.opencode/commands`,
   `.opencode/skills`, `opencode.json`, plugins, and events.
-
