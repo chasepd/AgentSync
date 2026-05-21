@@ -51,7 +51,7 @@ git show {HEAD_SHA}:path/to/file
 - Discovery paths match the intended agent:
   - Codex: `AGENTS.md`, `.codex/skills/*/SKILL.md`, `.agents/skills/*/SKILL.md`
   - Claude: `CLAUDE.md`, `.claude/CLAUDE.md`, `.claude/skills/*/SKILL.md`, `.claude/agents/*.md`
-  - Cursor: `.cursor/rules/**`, `.cursor/skills/*/SKILL.md`, shared `AGENTS.md`
+  - Cursor CLI: CLI-consumed `.cursor/rules/**`, `.cursor/skills/*/SKILL.md`, shared `AGENTS.md` / `CLAUDE.md`
   - OpenCode: `AGENTS.md`, `.opencode/skills/*/SKILL.md`, `.opencode/agents/*.md`, `.opencode/commands/*.md`, `opencode.json`
 - Shared files such as `AGENTS.md` are handled deterministically.
 - Unsupported fields are surfaced through diagnostics/capabilities.

@@ -275,7 +275,7 @@ fn select_sources(
                 .any(|path| path == Path::new("AGENTS.md")),
             SourceAlias::Codex => resource.source_agent == Agent::Codex,
             SourceAlias::Claude => resource.source_agent == Agent::Claude,
-            SourceAlias::Cursor => resource.source_agent == Agent::Cursor,
+            SourceAlias::CursorCli => resource.source_agent == Agent::CursorCli,
             SourceAlias::OpenCode => resource.source_agent == Agent::OpenCode,
         })
         .collect::<Vec<_>>();
@@ -423,7 +423,7 @@ fn infer_agent_from_path(path: &Path) -> Agent {
     if text.starts_with(".claude/") || text == "CLAUDE.md" {
         Agent::Claude
     } else if text.starts_with(".cursor/") {
-        Agent::Cursor
+        Agent::CursorCli
     } else if text.starts_with(".opencode/") {
         Agent::OpenCode
     } else {
@@ -610,7 +610,7 @@ mod tests {
             dir.path(),
             ResourceSelector::Rules,
             SourceAlias::AgentsMd,
-            &[Agent::Cursor],
+            &[Agent::CursorCli],
         )
         .unwrap();
         write_plan(dir.path(), &cursor_report).unwrap();
