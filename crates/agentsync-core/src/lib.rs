@@ -220,6 +220,7 @@ pub fn write_plan(root: impl AsRef<Path>, report: &PlanReport) -> Result<(), Age
             "planned write contains blocked actions".to_string(),
         ));
     }
+    let mut wrote_anything = false;
     for action in &report.actions {
         if !matches!(
             action.action,
@@ -232,19 +233,16 @@ pub fn write_plan(root: impl AsRef<Path>, report: &PlanReport) -> Result<(), Age
         })?;
         let abs = root.join(&rendered.path);
         if abs.exists() {
-            let backup = abs.with_extension(format!(
-                "{}bak",
-                abs.extension()
-                    .and_then(|ext| ext.to_str())
-                    .map(|ext| format!("{ext}."))
-                    .unwrap_or_default()
-            ));
-            fs::copy(&abs, backup)?;
+            fs::copy(&abs, backup_path(&abs))?;
         }
         if let Some(parent) = abs.parent() {
             fs::create_dir_all(parent)?;
         }
         fs::write(abs, &rendered.contents)?;
+        wrote_anything = true;
+    }
+    if !wrote_anything {
+        return Ok(());
     }
     save_state_from_plan(root, report)
 }
@@ -309,6 +307,33 @@ fn block_action(source: &NormalizedResource, target: Agent, reason: &str) -> Pla
     }
 }
 
+fn backup_path(path: &Path) -> PathBuf {
+    let candidate = path.with_extension(format!(
+        "{}bak",
+        path.extension()
+            .and_then(|ext| ext.to_str())
+            .map(|ext| format!("{ext}."))
+            .unwrap_or_default()
+    ));
+    if !candidate.exists() {
+        return candidate;
+    }
+
+    for index in 2.. {
+        let candidate = path.with_extension(format!(
+            "{}bak.{index}",
+            path.extension()
+                .and_then(|ext| ext.to_str())
+                .map(|ext| format!("{ext}."))
+                .unwrap_or_default()
+        ));
+        if !candidate.exists() {
+            return candidate;
+        }
+    }
+    unreachable!("unbounded backup suffix search should always return")
+}
+
 fn unified_diff(path: &Path, old: Option<String>, new: &str) -> String {
     let old = old.unwrap_or_default();
     let mut out = format!("--- a/{}\n+++ b/{}\n", path.display(), path.display());
@@ -346,6 +371,9 @@ fn save_state_from_plan(root: &Path, report: &PlanReport) -> Result<(), AgentSyn
                 path: rendered.path.clone(),
                 native_checksum,
             });
+    }
+    if by_resource.is_empty() {
+        return Ok(());
     }
     for (resource_id, targets) in by_resource {
         let Some(source) = scan
@@ -569,5 +597,58 @@ mod tests {
             .targets
             .iter()
             .any(|target| target.path == Path::new(".cursor/rules/agentsync.md")));
+    }
+
+    #[test]
+    fn repeated_updates_create_unique_backups() {
+        let dir = tempdir().unwrap();
+        fs::write(dir.path().join("AGENTS.md"), "first\n").unwrap();
+        fs::write(dir.path().join("CLAUDE.md"), "existing\n").unwrap();
+
+        let report = plan(
+            dir.path(),
+            ResourceSelector::Rules,
+            SourceAlias::AgentsMd,
+            &[Agent::Claude],
+        )
+        .unwrap();
+        write_plan(dir.path(), &report).unwrap();
+        fs::write(dir.path().join("AGENTS.md"), "second\n").unwrap();
+        let report = plan(
+            dir.path(),
+            ResourceSelector::Rules,
+            SourceAlias::AgentsMd,
+            &[Agent::Claude],
+        )
+        .unwrap();
+        write_plan(dir.path(), &report).unwrap();
+
+        assert_eq!(
+            fs::read_to_string(dir.path().join("CLAUDE.md.bak")).unwrap(),
+            "existing\n"
+        );
+        assert_eq!(
+            fs::read_to_string(dir.path().join("CLAUDE.md.bak.2")).unwrap(),
+            "first\n"
+        );
+    }
+
+    #[test]
+    fn skipped_write_does_not_create_empty_state() {
+        let dir = tempdir().unwrap();
+        fs::write(dir.path().join("AGENTS.md"), "same\n").unwrap();
+        fs::write(dir.path().join("CLAUDE.md"), "same\n").unwrap();
+
+        let report = plan(
+            dir.path(),
+            ResourceSelector::Rules,
+            SourceAlias::AgentsMd,
+            &[Agent::Claude],
+        )
+        .unwrap();
+        assert_eq!(report.actions[0].action, PlanActionKind::Skip);
+        write_plan(dir.path(), &report).unwrap();
+
+        assert!(!dir.path().join(".agentsync/state.json").exists());
     }
 }
