@@ -336,6 +336,8 @@ Examples:
 - A sandbox or permission policy in one tool may not have an equivalent in another.
 - Hook systems vary widely. Some are declarative config, while others are executable plugin code.
 - Cursor CLI rules and `AGENTS.md` instructions may overlap but are not always equivalent.
+- OpenCode `opencode.json` rules are read from literal `instructions` file paths.
+  Glob patterns are reported as partial until AgentSync grows deterministic glob expansion.
 - Skills are most portable when they follow the open `SKILL.md` pattern, keep
   related assets inside the skill folder, and avoid agent-specific frontmatter.
 
