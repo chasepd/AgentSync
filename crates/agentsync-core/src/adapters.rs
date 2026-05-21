@@ -1,9 +1,7 @@
 use std::path::Path;
 
 use crate::diagnostics::{AgentSyncError, Diagnostic};
-use crate::model::{
-    AdapterCapabilities, NativeResource, NormalizedResource, RenderedFile, Scope,
-};
+use crate::model::{AdapterCapabilities, NativeResource, NormalizedResource, RenderedFile, Scope};
 
 pub trait AgentAdapter {
     fn capabilities(&self) -> AdapterCapabilities;
@@ -19,4 +17,3 @@ pub trait AgentAdapter {
 
     fn validate(&self, root: &Path, scope: Scope) -> Result<Vec<Diagnostic>, AgentSyncError>;
 }
-

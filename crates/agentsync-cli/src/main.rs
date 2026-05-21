@@ -1,4 +1,4 @@
-use agentsync_core::{AgentSyncError, Scope};
+use agentsync_core::{Agent, AgentSyncError, ResourceSelector, Scope, SourceAlias};
 use clap::{Parser, Subcommand, ValueEnum};
 
 #[derive(Debug, Parser)]
@@ -28,9 +28,28 @@ enum Command {
         check: bool,
     },
     /// Preview generated target changes.
-    Diff,
+    Diff {
+        resource: CliResource,
+
+        #[arg(long)]
+        from: CliSource,
+
+        #[arg(long, value_delimiter = ',')]
+        to: Vec<CliAgent>,
+    },
     /// Generate or update target formats. Writes require --write.
     Sync {
+        resource: CliResource,
+
+        #[arg(long)]
+        from: CliSource,
+
+        #[arg(long, value_delimiter = ',')]
+        to: Vec<CliAgent>,
+
+        #[arg(long)]
+        dry_run: bool,
+
         #[arg(long)]
         write: bool,
     },
@@ -45,6 +64,29 @@ enum CliScope {
     Project,
     User,
     All,
+}
+
+#[derive(Clone, Debug, ValueEnum)]
+enum CliResource {
+    Rules,
+    Skills,
+}
+
+#[derive(Clone, Debug, ValueEnum)]
+enum CliSource {
+    AgentsMd,
+    Codex,
+    Claude,
+    Cursor,
+    Opencode,
+}
+
+#[derive(Clone, Debug, ValueEnum)]
+enum CliAgent {
+    Codex,
+    Claude,
+    Cursor,
+    Opencode,
 }
 
 impl std::fmt::Display for CliScope {
@@ -67,6 +109,38 @@ impl From<CliScope> for Scope {
     }
 }
 
+impl From<CliResource> for ResourceSelector {
+    fn from(value: CliResource) -> Self {
+        match value {
+            CliResource::Rules => Self::Rules,
+            CliResource::Skills => Self::Skills,
+        }
+    }
+}
+
+impl From<CliSource> for SourceAlias {
+    fn from(value: CliSource) -> Self {
+        match value {
+            CliSource::AgentsMd => Self::AgentsMd,
+            CliSource::Codex => Self::Codex,
+            CliSource::Claude => Self::Claude,
+            CliSource::Cursor => Self::Cursor,
+            CliSource::Opencode => Self::OpenCode,
+        }
+    }
+}
+
+impl From<CliAgent> for Agent {
+    fn from(value: CliAgent) -> Self {
+        match value {
+            CliAgent::Codex => Self::Codex,
+            CliAgent::Claude => Self::Claude,
+            CliAgent::Cursor => Self::Cursor,
+            CliAgent::Opencode => Self::OpenCode,
+        }
+    }
+}
+
 fn main() -> Result<(), AgentSyncError> {
     let cli = Cli::parse();
 
@@ -75,7 +149,7 @@ fn main() -> Result<(), AgentSyncError> {
             let scope: Scope = scope.into();
             let report = agentsync_core::scan(scope)?;
             if json {
-                println!("{}", report.to_json_placeholder());
+                println!("{}", serde_json::to_string_pretty(&report)?);
             } else {
                 println!("{}", report.to_table());
             }
@@ -84,18 +158,39 @@ fn main() -> Result<(), AgentSyncError> {
             let scope: Scope = scope.into();
             let report = agentsync_core::status(scope)?;
             println!("{}", report.to_table());
-            if check && report.has_drift() {
+            if check && report.has_blocking_issues() {
                 std::process::exit(1);
             }
         }
-        Command::Diff => {
-            println!("diff planning is not implemented yet");
+        Command::Diff { resource, from, to } => {
+            let targets = to.into_iter().map(Agent::from).collect::<Vec<_>>();
+            let report = agentsync_core::plan(
+                std::env::current_dir()?,
+                resource.into(),
+                from.into(),
+                &targets,
+            )?;
+            print!("{}", report.to_text());
         }
-        Command::Sync { write } => {
+        Command::Sync {
+            resource,
+            from,
+            to,
+            dry_run,
+            write,
+        } => {
+            let targets = to.into_iter().map(Agent::from).collect::<Vec<_>>();
+            let report = agentsync_core::plan(
+                std::env::current_dir()?,
+                resource.into(),
+                from.into(),
+                &targets,
+            )?;
+            print!("{}", report.to_text());
             if write {
-                println!("sync writes are not implemented yet");
-            } else {
-                println!("sync dry-run planning is not implemented yet");
+                agentsync_core::write_plan(std::env::current_dir()?, &report)?;
+            } else if !dry_run {
+                println!("No files written. Re-run with --write to apply changes.");
             }
         }
         Command::Init => {
@@ -108,4 +203,3 @@ fn main() -> Result<(), AgentSyncError> {
 
     Ok(())
 }
-
