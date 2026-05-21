@@ -8,7 +8,7 @@ use walkdir::WalkDir;
 use crate::diagnostics::{AgentSyncError, Diagnostic, DiagnosticSeverity};
 use crate::model::{
     AdapterCapabilities, Agent, NativeResource, NormalizedResource, RenderedFile, ResourceKind,
-    RuleSet, Scope, Skill, SupportLevel,
+    RuleSet, Scope, Skill, SkillAsset, SupportLevel,
 };
 
 pub trait AgentAdapter {
@@ -419,6 +419,9 @@ fn normalize_skill(
         .map(ToOwned::to_owned);
     let dir = native.path.parent().unwrap_or(Path::new(""));
     let mut asset_paths = Vec::new();
+    let mut assets = Vec::new();
+    let mut diagnostics = Vec::new();
+    let mut support = SupportLevel::Portable;
     for entry in WalkDir::new(root.join(dir))
         .min_depth(1)
         .into_iter()
@@ -427,10 +430,35 @@ fn normalize_skill(
         if entry.file_type().is_file() && entry.file_name() != "SKILL.md" {
             if let Ok(rel) = entry.path().strip_prefix(root) {
                 asset_paths.push(rel.to_path_buf());
+                let relative_path = rel
+                    .strip_prefix(dir)
+                    .map(Path::to_path_buf)
+                    .unwrap_or_else(|_| rel.to_path_buf());
+                match fs::read_to_string(entry.path()) {
+                    Ok(contents) => assets.push(SkillAsset {
+                        relative_path,
+                        contents,
+                    }),
+                    Err(error) if error.kind() == std::io::ErrorKind::InvalidData => {
+                        support = SupportLevel::Partial;
+                        diagnostics.push(Diagnostic {
+                            severity: DiagnosticSeverity::Warning,
+                            resource_id: Some(format!("skills:{name}")),
+                            resource_kind: Some(ResourceKind::Skill),
+                            agent: Some(native.agent),
+                            message: format!(
+                                "skill asset {} is not UTF-8 and cannot be synced in the MVP",
+                                rel.display()
+                            ),
+                        });
+                    }
+                    Err(error) => return Err(error.into()),
+                }
             }
         }
     }
     asset_paths.sort();
+    assets.sort_by(|a, b| a.relative_path.cmp(&b.relative_path));
     Ok(NormalizedResource {
         id: format!("skills:{name}"),
         kind: ResourceKind::Skill,
@@ -443,11 +471,12 @@ fn normalize_skill(
             description,
             body,
             asset_paths,
+            assets,
             frontmatter,
         }),
         native_extensions: BTreeMap::new(),
-        diagnostics: Vec::new(),
-        support: SupportLevel::Portable,
+        diagnostics,
+        support,
     })
 }
 
@@ -542,7 +571,8 @@ fn render_skill(
         Agent::CursorCli => PathBuf::from(".cursor/skills"),
         Agent::OpenCode => PathBuf::from(".opencode/skills"),
     };
-    let path = base.join(&skill.name).join("SKILL.md");
+    let skill_dir = base.join(&skill.name);
+    let path = skill_dir.join("SKILL.md");
     let mut contents = String::new();
     if !skill.frontmatter.is_empty() {
         contents.push_str("---\n");
@@ -553,7 +583,24 @@ fn render_skill(
         contents.push_str("---\n");
     }
     contents.push_str(&skill.body);
-    Ok((vec![RenderedFile { path, contents }], Vec::new()))
+    let mut files = vec![RenderedFile { path, contents }];
+    for asset in &skill.assets {
+        if asset
+            .relative_path
+            .components()
+            .any(|component| matches!(component, std::path::Component::ParentDir))
+        {
+            return Err(AgentSyncError::InvalidArgument(format!(
+                "skill asset path may not escape skill directory: {}",
+                asset.relative_path.display()
+            )));
+        }
+        files.push(RenderedFile {
+            path: skill_dir.join(&asset.relative_path),
+            contents: asset.contents.clone(),
+        });
+    }
+    Ok((files, Vec::new()))
 }
 
 #[cfg(test)]

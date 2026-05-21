@@ -336,7 +336,8 @@ Examples:
 - A sandbox or permission policy in one tool may not have an equivalent in another.
 - Hook systems vary widely. Some are declarative config, while others are executable plugin code.
 - Cursor CLI rules and `AGENTS.md` instructions may overlap but are not always equivalent.
-- Skills are most portable when they follow the open `SKILL.md` pattern and avoid agent-specific frontmatter.
+- Skills are most portable when they follow the open `SKILL.md` pattern, keep
+  related assets inside the skill folder, and avoid agent-specific frontmatter.
 
 When a conversion is lossy, AgentSync marks it clearly:
 
@@ -494,7 +495,7 @@ Review generated hooks and plugins before enabling them.
 
 - [ ] Read-only scanner for Claude Code, Codex CLI, Cursor CLI, and OpenCode.
 - [ ] Rules/context sync.
-- [ ] Skills sync using `SKILL.md`.
+- [ ] Skills sync using `SKILL.md` plus portable text assets in the skill folder.
 - [ ] Claude Code subagent to Codex/OpenCode conversion.
 - [ ] OpenCode agent and command rendering.
 - [ ] Hook/plugin conversion with safety warnings.

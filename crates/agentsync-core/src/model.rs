@@ -106,7 +106,14 @@ pub struct Skill {
     pub description: Option<String>,
     pub body: String,
     pub asset_paths: Vec<PathBuf>,
+    pub assets: Vec<SkillAsset>,
     pub frontmatter: BTreeMap<String, serde_json::Value>,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct SkillAsset {
+    pub relative_path: PathBuf,
+    pub contents: String,
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
