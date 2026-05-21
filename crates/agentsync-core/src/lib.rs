@@ -2,6 +2,7 @@ pub mod adapters;
 pub mod diagnostics;
 pub mod model;
 pub mod report;
+pub mod state;
 
 use std::collections::BTreeMap;
 use std::fs;
@@ -13,8 +14,8 @@ use model::{NativeResource, NormalizedResource, SupportLevel};
 use report::{
     DriftState, PlanAction, PlanActionKind, PlanReport, ScanReport, StatusItem, StatusReport,
 };
-use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
+use state::{load_state, save_state, StateFile, StateResource, StateTarget};
 
 pub use diagnostics::{AgentSyncError, Diagnostic, DiagnosticSeverity};
 pub use model::{Agent, ResourceKind, ResourceSelector, Scope, SourceAlias};
@@ -321,40 +322,6 @@ fn unified_diff(path: &Path, old: Option<String>, new: &str) -> String {
     out
 }
 
-#[derive(Clone, Debug, Deserialize, Serialize)]
-struct StateFile {
-    version: u32,
-    resources: Vec<StateResource>,
-}
-
-#[derive(Clone, Debug, Deserialize, Serialize)]
-struct StateResource {
-    resource_id: String,
-    kind: ResourceKind,
-    source_paths: Vec<PathBuf>,
-    source_checksum: String,
-    targets: Vec<StateTarget>,
-    last_synced_at: String,
-}
-
-#[derive(Clone, Debug, Deserialize, Serialize)]
-struct StateTarget {
-    agent: Agent,
-    path: PathBuf,
-    native_checksum: String,
-}
-
-fn load_state(root: &Path) -> Result<StateFile, AgentSyncError> {
-    let path = root.join(".agentsync/state.json");
-    if !path.exists() {
-        return Ok(StateFile {
-            version: 1,
-            resources: Vec::new(),
-        });
-    }
-    Ok(serde_json::from_str(&fs::read_to_string(path)?)?)
-}
-
 fn save_state_from_plan(root: &Path, report: &PlanReport) -> Result<(), AgentSyncError> {
     let scan = scan_root(root, Scope::Project)?;
     let mut state = load_state(root)?;
@@ -389,27 +356,29 @@ fn save_state_from_plan(root: &Path, report: &PlanReport) -> Result<(), AgentSyn
             continue;
         };
         let source_checksum = normalized_checksum(source)?;
-        state
-            .resources
-            .retain(|entry| entry.resource_id != source.id);
-        state.resources.push(StateResource {
-            resource_id: source.id.clone(),
-            kind: source.kind,
-            source_paths: source.native_paths.clone(),
-            source_checksum,
-            targets,
-            last_synced_at: now.clone(),
-        });
+        if let Some(entry) = state.resource_mut(&source.id) {
+            entry.kind = source.kind;
+            entry.source_paths = source.native_paths.clone();
+            entry.source_checksum = source_checksum;
+            entry.last_synced_at = now.clone();
+            for target in targets {
+                entry.upsert_target(target);
+            }
+        } else {
+            state.resources.push(StateResource {
+                resource_id: source.id.clone(),
+                kind: source.kind,
+                source_paths: source.native_paths.clone(),
+                source_checksum,
+                targets,
+                last_synced_at: now.clone(),
+            });
+        }
     }
     state
         .resources
         .sort_by(|a, b| a.resource_id.cmp(&b.resource_id));
-    let path = root.join(".agentsync/state.json");
-    if let Some(parent) = path.parent() {
-        fs::create_dir_all(parent)?;
-    }
-    fs::write(path, serde_json::to_string_pretty(&state)?)?;
-    Ok(())
+    save_state(root, &state)
 }
 
 fn infer_agent_from_path(path: &Path) -> Agent {
@@ -483,6 +452,20 @@ mod tests {
     }
 
     #[test]
+    fn untracked_status_is_not_blocking() {
+        let dir = tempdir().unwrap();
+        fs::write(dir.path().join("AGENTS.md"), "repo rules\n").unwrap();
+
+        let status = status_root(dir.path(), Scope::Project).unwrap();
+
+        assert!(status
+            .items
+            .iter()
+            .any(|item| item.state == DriftState::Untracked));
+        assert!(!status.has_blocking_issues());
+    }
+
+    #[test]
     fn scan_reports_builtin_capabilities() {
         let dir = tempdir().unwrap();
         let report = scan_root(dir.path(), Scope::Project).unwrap();
@@ -546,5 +529,45 @@ mod tests {
 
         assert_eq!(report.actions[0].action, PlanActionKind::Block);
         assert!(write_plan(dir.path(), &report).is_err());
+    }
+
+    #[test]
+    fn followup_sync_preserves_existing_state_targets() {
+        let dir = tempdir().unwrap();
+        fs::write(dir.path().join("AGENTS.md"), "repo rules\n").unwrap();
+
+        let claude_report = plan(
+            dir.path(),
+            ResourceSelector::Rules,
+            SourceAlias::AgentsMd,
+            &[Agent::Claude],
+        )
+        .unwrap();
+        write_plan(dir.path(), &claude_report).unwrap();
+
+        let cursor_report = plan(
+            dir.path(),
+            ResourceSelector::Rules,
+            SourceAlias::AgentsMd,
+            &[Agent::Cursor],
+        )
+        .unwrap();
+        write_plan(dir.path(), &cursor_report).unwrap();
+
+        let state = load_state(dir.path()).unwrap();
+        let entry = state
+            .resources
+            .iter()
+            .find(|entry| entry.resource_id == "rules:agents-md")
+            .unwrap();
+
+        assert!(entry
+            .targets
+            .iter()
+            .any(|target| target.path == Path::new("CLAUDE.md")));
+        assert!(entry
+            .targets
+            .iter()
+            .any(|target| target.path == Path::new(".cursor/rules/agentsync.md")));
     }
 }
