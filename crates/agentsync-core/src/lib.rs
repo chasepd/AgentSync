@@ -345,15 +345,176 @@ fn backup_path(path: &Path) -> PathBuf {
 
 fn unified_diff(path: &Path, old: Option<String>, new: &str) -> String {
     let old = old.unwrap_or_default();
+    let old_lines = old.lines().collect::<Vec<_>>();
+    let new_lines = new.lines().collect::<Vec<_>>();
+    let rows = diff_rows(&old_lines, &new_lines);
+    let hunks = diff_hunks(&rows, 3);
+
     let mut out = format!("--- a/{}\n+++ b/{}\n", path.display(), path.display());
-    out.push_str("@@\n");
-    for line in old.lines() {
-        out.push_str(&format!("-{line}\n"));
-    }
-    for line in new.lines() {
-        out.push_str(&format!("+{line}\n"));
+    for hunk in hunks {
+        out.push_str(&format!(
+            "@@ -{},{} +{},{} @@\n",
+            hunk.old_start, hunk.old_count, hunk.new_start, hunk.new_count
+        ));
+        for row in &rows[hunk.start..hunk.end] {
+            out.push(row.kind.prefix());
+            out.push_str(row.text);
+            out.push('\n');
+        }
     }
     out
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum DiffKind {
+    Equal,
+    Delete,
+    Insert,
+}
+
+impl DiffKind {
+    fn prefix(self) -> char {
+        match self {
+            Self::Equal => ' ',
+            Self::Delete => '-',
+            Self::Insert => '+',
+        }
+    }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+struct DiffRow<'a> {
+    kind: DiffKind,
+    text: &'a str,
+    old_line: Option<usize>,
+    new_line: Option<usize>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+struct DiffHunk {
+    start: usize,
+    end: usize,
+    old_start: usize,
+    old_count: usize,
+    new_start: usize,
+    new_count: usize,
+}
+
+fn diff_rows<'a>(old: &[&'a str], new: &[&'a str]) -> Vec<DiffRow<'a>> {
+    let mut lcs = vec![vec![0; new.len() + 1]; old.len() + 1];
+    for old_index in (0..old.len()).rev() {
+        for new_index in (0..new.len()).rev() {
+            lcs[old_index][new_index] = if old[old_index] == new[new_index] {
+                lcs[old_index + 1][new_index + 1] + 1
+            } else {
+                lcs[old_index + 1][new_index].max(lcs[old_index][new_index + 1])
+            };
+        }
+    }
+
+    let mut rows = Vec::new();
+    let mut old_index = 0;
+    let mut new_index = 0;
+    let mut old_line = 1;
+    let mut new_line = 1;
+    while old_index < old.len() && new_index < new.len() {
+        if old[old_index] == new[new_index] {
+            rows.push(DiffRow {
+                kind: DiffKind::Equal,
+                text: old[old_index],
+                old_line: Some(old_line),
+                new_line: Some(new_line),
+            });
+            old_index += 1;
+            new_index += 1;
+            old_line += 1;
+            new_line += 1;
+        } else if lcs[old_index + 1][new_index] >= lcs[old_index][new_index + 1] {
+            rows.push(DiffRow {
+                kind: DiffKind::Delete,
+                text: old[old_index],
+                old_line: Some(old_line),
+                new_line: None,
+            });
+            old_index += 1;
+            old_line += 1;
+        } else {
+            rows.push(DiffRow {
+                kind: DiffKind::Insert,
+                text: new[new_index],
+                old_line: None,
+                new_line: Some(new_line),
+            });
+            new_index += 1;
+            new_line += 1;
+        }
+    }
+    while old_index < old.len() {
+        rows.push(DiffRow {
+            kind: DiffKind::Delete,
+            text: old[old_index],
+            old_line: Some(old_line),
+            new_line: None,
+        });
+        old_index += 1;
+        old_line += 1;
+    }
+    while new_index < new.len() {
+        rows.push(DiffRow {
+            kind: DiffKind::Insert,
+            text: new[new_index],
+            old_line: None,
+            new_line: Some(new_line),
+        });
+        new_index += 1;
+        new_line += 1;
+    }
+    rows
+}
+
+fn diff_hunks(rows: &[DiffRow<'_>], context: usize) -> Vec<DiffHunk> {
+    let changed = rows
+        .iter()
+        .enumerate()
+        .filter_map(|(index, row)| (row.kind != DiffKind::Equal).then_some(index))
+        .collect::<Vec<_>>();
+    if changed.is_empty() {
+        return Vec::new();
+    }
+
+    let mut ranges = Vec::<(usize, usize)>::new();
+    for index in changed {
+        let start = index.saturating_sub(context);
+        let end = (index + context + 1).min(rows.len());
+        if let Some((_, previous_end)) = ranges.last_mut() {
+            if start <= *previous_end {
+                *previous_end = (*previous_end).max(end);
+                continue;
+            }
+        }
+        ranges.push((start, end));
+    }
+
+    ranges
+        .into_iter()
+        .map(|(start, end)| {
+            let rows = &rows[start..end];
+            let old_count = rows.iter().filter(|row| row.old_line.is_some()).count();
+            let new_count = rows.iter().filter(|row| row.new_line.is_some()).count();
+            DiffHunk {
+                start,
+                end,
+                old_start: hunk_start(rows.iter().filter_map(|row| row.old_line)),
+                old_count,
+                new_start: hunk_start(rows.iter().filter_map(|row| row.new_line)),
+                new_count,
+            }
+        })
+        .collect()
+}
+
+fn hunk_start(mut lines: impl Iterator<Item = usize>) -> usize {
+    lines.next().unwrap_or(0)
 }
 
 fn save_state_from_plan(root: &Path, report: &PlanReport) -> Result<(), AgentSyncError> {
@@ -683,6 +844,33 @@ mod tests {
         write_plan(dir.path(), &report).unwrap();
 
         assert!(!dir.path().join(".agentsync/state.json").exists());
+    }
+
+    #[test]
+    fn unified_diff_uses_hunks_and_context() {
+        let old = (1..=9)
+            .map(|index| format!("line {index}"))
+            .collect::<Vec<_>>()
+            .join("\n");
+        let new = old.replace("line 5", "changed 5");
+
+        let diff = unified_diff(Path::new("CLAUDE.md"), Some(old), &new);
+
+        assert!(diff.starts_with("--- a/CLAUDE.md\n+++ b/CLAUDE.md\n"));
+        assert!(diff.contains("@@ -2,7 +2,7 @@\n"));
+        assert!(!diff.contains(" line 1\n"));
+        assert!(!diff.contains(" line 9\n"));
+        assert!(diff.contains("-line 5\n"));
+        assert!(diff.contains("+changed 5\n"));
+    }
+
+    #[test]
+    fn unified_diff_create_file_has_zero_old_count() {
+        let diff = unified_diff(Path::new("CLAUDE.md"), None, "one\ntwo\n");
+
+        assert!(diff.contains("@@ -0,0 +1,2 @@\n"));
+        assert!(diff.contains("+one\n"));
+        assert!(diff.contains("+two\n"));
     }
 
     #[test]
