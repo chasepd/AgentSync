@@ -186,6 +186,40 @@ pub enum PlanActionKind {
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct InitReport {
+    pub path: PathBuf,
+    pub action: InitActionKind,
+    pub contents: String,
+    pub message: String,
+}
+
+impl InitReport {
+    pub fn to_text(&self) -> String {
+        let mut out = format!(
+            "{:?} {} ({})\n",
+            self.action,
+            self.path.display(),
+            self.message
+        );
+        if self.action == InitActionKind::Create {
+            out.push_str("--- config.toml\n");
+            out.push_str(&self.contents);
+            if !self.contents.ends_with('\n') {
+                out.push('\n');
+            }
+        }
+        out
+    }
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum InitActionKind {
+    Create,
+    Skip,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct DoctorReport {
     pub root: PathBuf,
     pub state_path: PathBuf,

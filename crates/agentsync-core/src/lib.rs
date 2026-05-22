@@ -12,8 +12,8 @@ use adapters::built_in_adapters;
 use chrono::Utc;
 use model::{NativeResource, NormalizedResource, SupportLevel};
 use report::{
-    DoctorReport, DriftState, PlanAction, PlanActionKind, PlanReport, ScanReport, StatusItem,
-    StatusReport,
+    DoctorReport, DriftState, InitActionKind, InitReport, PlanAction, PlanActionKind, PlanReport,
+    ScanReport, StatusItem, StatusReport,
 };
 use sha2::{Digest, Sha256};
 use state::{load_state, save_state, StateFile, StateResource, StateTarget};
@@ -72,6 +72,50 @@ pub fn doctor() -> Result<DoctorReport, AgentSyncError> {
     doctor_root(std::env::current_dir()?)
 }
 
+pub fn init() -> Result<InitReport, AgentSyncError> {
+    init_root(std::env::current_dir()?)
+}
+
+pub fn init_root(root: impl AsRef<Path>) -> Result<InitReport, AgentSyncError> {
+    let root = root.as_ref();
+    let path = PathBuf::from(".agentsync/config.toml");
+    let abs = root.join(&path);
+    let contents = default_config();
+    let (action, message) = if abs.exists() {
+        (
+            InitActionKind::Skip,
+            "config already exists; leaving it untouched".to_string(),
+        )
+    } else {
+        (
+            InitActionKind::Create,
+            "config is ready to create".to_string(),
+        )
+    };
+    Ok(InitReport {
+        path,
+        action,
+        contents,
+        message,
+    })
+}
+
+pub fn write_init(root: impl AsRef<Path>, report: &InitReport) -> Result<(), AgentSyncError> {
+    let root = root.as_ref();
+    if report.action != InitActionKind::Create {
+        return Ok(());
+    }
+    let abs = root.join(&report.path);
+    if abs.exists() {
+        return Ok(());
+    }
+    if let Some(parent) = abs.parent() {
+        fs::create_dir_all(parent)?;
+    }
+    fs::write(abs, &report.contents)?;
+    Ok(())
+}
+
 pub fn doctor_root(root: impl AsRef<Path>) -> Result<DoctorReport, AgentSyncError> {
     let root = root.as_ref();
     let scan = scan_root(root, Scope::Project)?;
@@ -118,6 +162,21 @@ pub fn doctor_root(root: impl AsRef<Path>) -> Result<DoctorReport, AgentSyncErro
         blocking_status_count,
         diagnostics,
     })
+}
+
+fn default_config() -> String {
+    r#"schema_version = 1
+
+[defaults]
+scope = "project"
+source = "agents-md"
+targets = ["claude", "cursor", "opencode"]
+
+[sync]
+rules = true
+skills = true
+"#
+    .to_string()
 }
 
 pub fn status_root(root: impl AsRef<Path>, scope: Scope) -> Result<StatusReport, AgentSyncError> {

@@ -62,8 +62,14 @@ enum Command {
         #[arg(long)]
         json: bool,
     },
-    /// Create an AgentSync config file.
-    Init,
+    /// Create an AgentSync config file. Writes require --write.
+    Init {
+        #[arg(long)]
+        write: bool,
+
+        #[arg(long)]
+        json: bool,
+    },
     /// Validate local setup and compatibility.
     Doctor {
         #[arg(long)]
@@ -228,8 +234,25 @@ fn main() -> Result<(), AgentSyncError> {
                 println!("No files written. Re-run with --write to apply changes.");
             }
         }
-        Command::Init => {
-            println!("init is not implemented yet");
+        Command::Init { write, json } => {
+            let report = agentsync_core::init()?;
+            if json {
+                println!("{}", serde_json::to_string_pretty(&report)?);
+            } else {
+                print!("{}", report.to_text());
+            }
+            if write {
+                agentsync_core::write_init(std::env::current_dir()?, &report)?;
+                if !json {
+                    if report.action == agentsync_core::report::InitActionKind::Create {
+                        println!("Wrote {}.", report.path.display());
+                    } else {
+                        println!("No files written.");
+                    }
+                }
+            } else if !json {
+                println!("No files written. Re-run with --write to create config.");
+            }
         }
         Command::Doctor { check, json } => {
             let report = agentsync_core::doctor()?;
