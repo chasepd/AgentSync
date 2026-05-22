@@ -1,5 +1,7 @@
 use crate::diagnostics::Diagnostic;
-use crate::model::{AdapterCapabilities, NativeResource, NormalizedResource, RenderedFile, Scope};
+use crate::model::{
+    AdapterCapabilities, NativeResource, NormalizedResource, RenderedFile, ResourceKind, Scope,
+};
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 
@@ -25,10 +27,20 @@ impl ScanReport {
 
     pub fn to_table(&self) -> String {
         let mut out = format!("AgentSync scan ({:?})\n", self.scope);
-        for resource in &self.resources {
+        let mut resources = self.resources.clone();
+        resources.sort_by(|a, b| {
+            (a.kind, a.path.as_path(), a.agent).cmp(&(b.kind, b.path.as_path(), b.agent))
+        });
+
+        let mut current_kind = None::<ResourceKind>;
+        for resource in &resources {
+            if current_kind != Some(resource.kind) {
+                current_kind = Some(resource.kind);
+                out.push_str(resource.kind.as_str());
+                out.push('\n');
+            }
             out.push_str(&format!(
-                "{:<10} {:<8} {}\n",
-                resource.kind.as_str(),
+                "  {:<8} {}\n",
                 resource.agent.as_str(),
                 resource.path.display()
             ));
