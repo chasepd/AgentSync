@@ -5,7 +5,8 @@ AgentSync stores project metadata under `.agentsync/`.
 ## Config
 
 `.agentsync/config.toml` records project defaults. The MVP config starts with
-source agent, target agents, project scope, and rules/skills sync toggles.
+source agent, target agents, project scope, and sync toggles for selectable
+resource kinds.
 
 Create the default project config with:
 
@@ -29,6 +30,9 @@ targets = ["claude", "cursor", "opencode"]
 [sync]
 rules = true
 skills = true
+subagents = false
+commands = false
+hooks = false
 ```
 
 When present, `defaults.scope` is used by `scan` and `status` if `--scope` is
@@ -45,6 +49,8 @@ agentsync sync rules --write
 When `diff` or `sync` use config defaults, `[sync]` toggles gate the selected
 resource kind. For example, `rules = false` blocks config-driven rules planning,
 and `skills = false` blocks config-driven skills planning before any write.
+Behavioral resources default to disabled in newly generated config because
+subagents, commands, and hooks are read-only/blocked in the MVP.
 
 Invalid config is reported by `agentsync doctor --check` and causes commands
 that need config defaults to fail before planning writes.

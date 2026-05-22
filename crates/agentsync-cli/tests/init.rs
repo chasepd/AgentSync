@@ -36,6 +36,9 @@ fn init_write_creates_config() {
     assert!(config.contains("targets = [\"claude\", \"cursor\", \"opencode\"]"));
     assert!(config.contains("rules = true"));
     assert!(config.contains("skills = true"));
+    assert!(config.contains("subagents = false"));
+    assert!(config.contains("commands = false"));
+    assert!(config.contains("hooks = false"));
 }
 
 #[test]

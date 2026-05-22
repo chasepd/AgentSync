@@ -308,6 +308,9 @@ targets = ["claude", "cursor", "opencode"]
 [sync]
 rules = true
 skills = true
+subagents = false
+commands = false
+hooks = false
 ```
 
 With those defaults, `scan` and `status` can omit `--scope`, while `diff` and
@@ -322,7 +325,8 @@ agentsync sync rules --write
 
 `[sync]` toggles gate config-driven planning for that resource kind, so setting
 `rules = false` or `skills = false` blocks those default-based commands before
-any write.
+any write. New configs default blocked behavioral resources to disabled:
+`subagents = false`, `commands = false`, and `hooks = false`.
 
 ## Conversion notes
 

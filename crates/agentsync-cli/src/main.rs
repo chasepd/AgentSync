@@ -390,9 +390,9 @@ fn validate_resource_enabled(
     let enabled = match resource {
         ResourceSelector::Rules => config.sync.rules.unwrap_or(true),
         ResourceSelector::Skills => config.sync.skills.unwrap_or(true),
-        ResourceSelector::Subagents => true,
-        ResourceSelector::Commands => true,
-        ResourceSelector::Hooks => true,
+        ResourceSelector::Subagents => config.sync.subagents.unwrap_or(true),
+        ResourceSelector::Commands => config.sync.commands.unwrap_or(true),
+        ResourceSelector::Hooks => config.sync.hooks.unwrap_or(true),
     };
     if enabled {
         Ok(())

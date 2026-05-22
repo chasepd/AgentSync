@@ -306,6 +306,100 @@ skills = false
 }
 
 #[test]
+fn diff_config_defaults_respect_disabled_subagents_sync() {
+    let dir = tempdir().unwrap();
+    fs::create_dir_all(dir.path().join(".agentsync")).unwrap();
+    fs::create_dir_all(dir.path().join(".claude/agents")).unwrap();
+    fs::write(
+        dir.path().join(".claude/agents/reviewer.md"),
+        "---\nname: reviewer\n---\nReview carefully.\n",
+    )
+    .unwrap();
+    fs::write(
+        dir.path().join(".agentsync/config.toml"),
+        r#"schema_version = 1
+
+[defaults]
+source = "claude"
+targets = ["codex"]
+
+[sync]
+subagents = false
+"#,
+    )
+    .unwrap();
+
+    Command::cargo_bin("agentsync")
+        .unwrap()
+        .current_dir(dir.path())
+        .args(["diff", "subagents"])
+        .assert()
+        .failure();
+}
+
+#[test]
+fn diff_config_defaults_respect_disabled_commands_sync() {
+    let dir = tempdir().unwrap();
+    fs::create_dir_all(dir.path().join(".agentsync")).unwrap();
+    fs::create_dir_all(dir.path().join(".opencode/commands")).unwrap();
+    fs::write(dir.path().join(".opencode/commands/deploy.md"), "deploy\n").unwrap();
+    fs::write(
+        dir.path().join(".agentsync/config.toml"),
+        r#"schema_version = 1
+
+[defaults]
+source = "opencode"
+targets = ["codex"]
+
+[sync]
+commands = false
+"#,
+    )
+    .unwrap();
+
+    Command::cargo_bin("agentsync")
+        .unwrap()
+        .current_dir(dir.path())
+        .args(["diff", "commands"])
+        .assert()
+        .failure();
+}
+
+#[test]
+fn sync_config_defaults_respect_disabled_hooks_sync_without_writing() {
+    let dir = tempdir().unwrap();
+    fs::create_dir_all(dir.path().join(".agentsync")).unwrap();
+    fs::create_dir_all(dir.path().join(".claude")).unwrap();
+    fs::write(
+        dir.path().join(".claude/settings.json"),
+        r#"{"hooks":{"PreToolUse":[]}}"#,
+    )
+    .unwrap();
+    fs::write(
+        dir.path().join(".agentsync/config.toml"),
+        r#"schema_version = 1
+
+[defaults]
+source = "claude"
+targets = ["codex"]
+
+[sync]
+hooks = false
+"#,
+    )
+    .unwrap();
+
+    Command::cargo_bin("agentsync")
+        .unwrap()
+        .current_dir(dir.path())
+        .args(["sync", "hooks", "--write"])
+        .assert()
+        .failure();
+
+    assert!(!dir.path().join(".agentsync/state.json").exists());
+}
+
+#[test]
 fn diff_without_cli_args_or_config_defaults_fails() {
     let dir = tempdir().unwrap();
     fs::write(dir.path().join("AGENTS.md"), "repo rules\n").unwrap();

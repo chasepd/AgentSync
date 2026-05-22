@@ -44,6 +44,9 @@ pub struct ConfigDefaults {
 pub struct ConfigSync {
     pub rules: Option<bool>,
     pub skills: Option<bool>,
+    pub subagents: Option<bool>,
+    pub commands: Option<bool>,
+    pub hooks: Option<bool>,
 }
 
 pub fn config_path(root: impl AsRef<Path>) -> PathBuf {
@@ -161,6 +164,28 @@ targets = ["claude", "cursor-cli", "opencode"]
             config.defaults.targets,
             vec![Agent::Claude, Agent::CursorCli, Agent::OpenCode]
         );
+    }
+
+    #[test]
+    fn config_accepts_sync_toggles_for_all_selectable_resources() {
+        let config = toml::from_str::<ConfigFile>(
+            r#"schema_version = 1
+
+[sync]
+rules = true
+skills = true
+subagents = false
+commands = false
+hooks = false
+"#,
+        )
+        .unwrap();
+
+        assert_eq!(config.sync.rules, Some(true));
+        assert_eq!(config.sync.skills, Some(true));
+        assert_eq!(config.sync.subagents, Some(false));
+        assert_eq!(config.sync.commands, Some(false));
+        assert_eq!(config.sync.hooks, Some(false));
     }
 
     #[test]
