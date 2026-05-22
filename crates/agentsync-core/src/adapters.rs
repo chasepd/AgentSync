@@ -256,6 +256,14 @@ impl AgentAdapter for OpenCodeAdapter {
             ResourceKind::Subagent,
             ".opencode/agents",
         );
+        discover_json_key_files(
+            &mut resources,
+            root,
+            self.agent(),
+            ResourceKind::Subagent,
+            OPENCODE_CONFIG_FILES,
+            "agent",
+        );
         discover_md_dir(
             &mut resources,
             root,
@@ -462,6 +470,11 @@ fn normalize_native(
     match native.kind {
         ResourceKind::RuleSet => normalize_rule(root, native),
         ResourceKind::Skill => normalize_skill(root, native),
+        ResourceKind::Subagent
+            if native.agent == Agent::OpenCode && is_opencode_config(&native.path) =>
+        {
+            Ok(blocked_behavior(root, native))
+        }
         ResourceKind::Subagent => normalize_subagent(root, native),
         ResourceKind::Hook | ResourceKind::Command | ResourceKind::Plugin => {
             Ok(blocked_behavior(root, native))
@@ -1071,6 +1084,14 @@ mod tests {
             r#"{
   // project config
   "instructions": ["docs/rules.md"],
+  "agent": {
+    "code-reviewer": {
+      "description": "Reviews code",
+      "tools": {
+        "write": false,
+      },
+    },
+  },
   "command": {
     "deploy": {
       "template": "Deploy the app",
@@ -1089,6 +1110,9 @@ mod tests {
 
         assert!(resources.iter().any(|resource| {
             resource.kind == ResourceKind::RuleSet && resource.path == Path::new("opencode.jsonc")
+        }));
+        assert!(resources.iter().any(|resource| {
+            resource.kind == ResourceKind::Subagent && resource.path == Path::new("opencode.jsonc")
         }));
         assert!(resources.iter().any(|resource| {
             resource.kind == ResourceKind::Command && resource.path == Path::new("opencode.jsonc")
@@ -1110,6 +1134,38 @@ mod tests {
             resource.rule_set.unwrap().body,
             "<!-- docs/rules.md -->\nproject rules\n"
         );
+    }
+
+    #[test]
+    fn opencode_config_agents_are_discovered_as_blocked_behavior() {
+        let dir = tempdir().unwrap();
+        fs::write(
+            dir.path().join("opencode.json"),
+            r#"{"agent":{"code-reviewer":{"description":"Reviews code","tools":{"write":false}}}}"#,
+        )
+        .unwrap();
+
+        let resources = OpenCodeAdapter
+            .discover(dir.path(), Scope::Project)
+            .unwrap();
+        let agent = resources
+            .iter()
+            .find(|resource| {
+                resource.kind == ResourceKind::Subagent
+                    && resource.path == Path::new("opencode.json")
+            })
+            .unwrap();
+        let resource = OpenCodeAdapter.read(dir.path(), agent).unwrap();
+
+        assert_eq!(resource.id, "subagents:opencode:opencode.json");
+        assert_eq!(resource.support, SupportLevel::Blocked);
+        assert!(resource.subagent.is_none());
+        assert!(resource
+            .native_extensions
+            .get("native.raw")
+            .and_then(Value::as_str)
+            .unwrap()
+            .contains("\"agent\""));
     }
 
     #[test]

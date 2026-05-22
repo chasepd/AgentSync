@@ -21,4 +21,4 @@ Each adapter provides:
   IDE workspace automation.
 - OpenCode: `AGENTS.md`, `.opencode/agents`, `.opencode/commands`,
   `.opencode/skills`, `opencode.json` / `opencode.jsonc` instructions, and
-  OpenCode command/plugin config.
+  OpenCode agent/command/plugin config.

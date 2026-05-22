@@ -207,6 +207,14 @@ fn scan_json_includes_opencode_jsonc_config_resources() {
         r#"{
   // OpenCode supports comments and trailing commas here.
   "instructions": ["docs/rules.md"],
+  "agent": {
+    "code-reviewer": {
+      "description": "Reviews code",
+      "tools": {
+        "write": false,
+      },
+    },
+  },
   "command": {
     "deploy": {
       "template": "Deploy the app",
@@ -236,8 +244,45 @@ fn scan_json_includes_opencode_jsonc_config_resources() {
         .any(|resource| resource["id"] == "rules:opencode:opencode.jsonc"));
     assert!(normalized
         .iter()
+        .any(|resource| resource["id"] == "subagents:opencode:opencode.jsonc"));
+    assert!(normalized
+        .iter()
         .any(|resource| resource["id"] == "commands:opencode:opencode.jsonc"));
     assert!(normalized
         .iter()
         .any(|resource| resource["id"] == "plugins:opencode:opencode.jsonc"));
+}
+
+#[test]
+fn scan_json_includes_opencode_config_agents_as_blocked() {
+    let dir = tempdir().unwrap();
+    fs::write(
+        dir.path().join("opencode.json"),
+        r#"{"agent":{"code-reviewer":{"description":"Reviews code","tools":{"write":false}}}}"#,
+    )
+    .unwrap();
+
+    let output = Command::cargo_bin("agentsync")
+        .unwrap()
+        .current_dir(dir.path())
+        .args(["scan", "--format", "json"])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let json: Value = serde_json::from_slice(&output).unwrap();
+    let subagent = json["normalized"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|resource| resource["id"] == "subagents:opencode:opencode.json")
+        .unwrap();
+
+    assert_eq!(subagent["kind"], "subagent");
+    assert_eq!(subagent["support"], "blocked");
+    assert!(subagent["native_extensions"]["native.raw"]
+        .as_str()
+        .unwrap()
+        .contains("\"agent\""));
 }
