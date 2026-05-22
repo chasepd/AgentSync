@@ -522,6 +522,35 @@ fn diff_subagent_returns_blocked_plan() {
 }
 
 #[test]
+fn diff_opencode_config_agent_returns_blocked_plan() {
+    let dir = tempdir().unwrap();
+    fs::write(
+        dir.path().join("opencode.json"),
+        r#"{"agent":{"code-reviewer":{"description":"Reviews code","tools":{"write":false}}}}"#,
+    )
+    .unwrap();
+
+    let output = Command::cargo_bin("agentsync")
+        .unwrap()
+        .current_dir(dir.path())
+        .args([
+            "diff", "subagent", "--from", "opencode", "--to", "codex", "--format", "json",
+        ])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let json: Value = serde_json::from_slice(&output).unwrap();
+
+    assert_eq!(json["actions"][0]["action"], "block");
+    assert_eq!(
+        json["actions"][0]["resource_id"],
+        "subagents:opencode:opencode.json"
+    );
+}
+
+#[test]
 fn sync_subagent_write_is_blocked_before_state_or_target_write() {
     let dir = tempdir().unwrap();
     fs::create_dir_all(dir.path().join(".claude/agents")).unwrap();

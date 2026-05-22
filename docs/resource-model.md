@@ -22,9 +22,11 @@ Portable fields are eligible for cross-agent rendering. Native extension fields
 are keyed by source agent and preserved when a target cannot represent them.
 
 Subagents are normalized read-only in the current MVP. AgentSync preserves name,
-description, body, and frontmatter in scan/status reports. `diff subagent` and
-`sync subagents` return blocked plan actions; rendering and write sync remain
-blocked until subagent conversion is explicitly supported.
+description, body, and frontmatter for Markdown subagent files in scan/status
+reports. OpenCode JSON/JSONC `agent` config is discovered as blocked subagent
+behavior and preserves raw native text. `diff subagent` and `sync subagents`
+return blocked plan actions; rendering and write sync remain blocked until
+subagent conversion is explicitly supported.
 
 Commands are also selectable for planning, but they remain blocked for MVP sync
 because command resources can encode behavioral or executable workflows.
