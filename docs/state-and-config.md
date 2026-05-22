@@ -31,6 +31,17 @@ rules = true
 skills = true
 ```
 
+When present, `defaults.source` and `defaults.targets` are used by `diff` and
+`sync` if `--from` or `--to` are omitted:
+
+```bash
+agentsync diff rules
+agentsync sync rules --write
+```
+
+Invalid config is reported by `agentsync doctor --check` and causes commands
+that need config defaults to fail before planning writes.
+
 ## State
 
 `.agentsync/state.json` records relationships between native files:

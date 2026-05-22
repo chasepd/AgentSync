@@ -310,6 +310,13 @@ rules = true
 skills = true
 ```
 
+With those defaults, `diff` and `sync` can omit `--from` and `--to`:
+
+```bash
+agentsync diff rules
+agentsync sync rules --write
+```
+
 ## Conversion notes
 
 Not every agent feature maps perfectly.

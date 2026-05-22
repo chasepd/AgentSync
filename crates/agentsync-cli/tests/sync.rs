@@ -146,6 +146,108 @@ fn diff_json_outputs_structured_plan() {
 }
 
 #[test]
+fn diff_uses_config_defaults_when_from_and_to_are_omitted() {
+    let dir = tempdir().unwrap();
+    fs::create_dir_all(dir.path().join(".agentsync")).unwrap();
+    fs::write(dir.path().join("AGENTS.md"), "repo rules\n").unwrap();
+    fs::write(
+        dir.path().join(".agentsync/config.toml"),
+        r#"schema_version = 1
+
+[defaults]
+source = "agents-md"
+targets = ["claude"]
+"#,
+    )
+    .unwrap();
+
+    let output = Command::cargo_bin("agentsync")
+        .unwrap()
+        .current_dir(dir.path())
+        .args(["diff", "rules", "--json"])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let json: Value = serde_json::from_slice(&output).unwrap();
+
+    assert_eq!(json["actions"][0]["path"], "CLAUDE.md");
+    assert_eq!(json["actions"][0]["action"], "create");
+}
+
+#[test]
+fn sync_uses_config_defaults_and_still_requires_write() {
+    let dir = tempdir().unwrap();
+    fs::create_dir_all(dir.path().join(".agentsync")).unwrap();
+    fs::write(dir.path().join("AGENTS.md"), "repo rules\n").unwrap();
+    fs::write(
+        dir.path().join(".agentsync/config.toml"),
+        r#"schema_version = 1
+
+[defaults]
+source = "agents-md"
+targets = ["claude"]
+"#,
+    )
+    .unwrap();
+
+    Command::cargo_bin("agentsync")
+        .unwrap()
+        .current_dir(dir.path())
+        .args(["sync", "rules"])
+        .assert()
+        .success();
+
+    assert!(!dir.path().join("CLAUDE.md").exists());
+    assert!(!dir.path().join(".agentsync/state.json").exists());
+
+    Command::cargo_bin("agentsync")
+        .unwrap()
+        .current_dir(dir.path())
+        .args(["sync", "rules", "--write"])
+        .assert()
+        .success();
+
+    assert_eq!(
+        fs::read_to_string(dir.path().join("CLAUDE.md")).unwrap(),
+        "repo rules\n"
+    );
+}
+
+#[test]
+fn diff_without_cli_args_or_config_defaults_fails() {
+    let dir = tempdir().unwrap();
+    fs::write(dir.path().join("AGENTS.md"), "repo rules\n").unwrap();
+
+    Command::cargo_bin("agentsync")
+        .unwrap()
+        .current_dir(dir.path())
+        .args(["diff", "rules"])
+        .assert()
+        .failure();
+}
+
+#[test]
+fn explicit_diff_args_do_not_require_valid_config() {
+    let dir = tempdir().unwrap();
+    fs::create_dir_all(dir.path().join(".agentsync")).unwrap();
+    fs::write(dir.path().join("AGENTS.md"), "repo rules\n").unwrap();
+    fs::write(
+        dir.path().join(".agentsync/config.toml"),
+        "schema_version = 2\n",
+    )
+    .unwrap();
+
+    Command::cargo_bin("agentsync")
+        .unwrap()
+        .current_dir(dir.path())
+        .args(["diff", "rules", "--from", "agents-md", "--to", "claude"])
+        .assert()
+        .success();
+}
+
+#[test]
 fn sync_json_without_write_outputs_json_and_does_not_write() {
     let dir = tempdir().unwrap();
     fs::write(dir.path().join("AGENTS.md"), "repo rules\n").unwrap();
