@@ -30,7 +30,8 @@ Commands are also selectable for planning, but they remain blocked for MVP sync
 because command resources can encode behavioral or executable workflows.
 `diff command` and `sync commands` report blocked plan actions instead of
 rendering target files or updating state. OpenCode command files and
-`opencode.json` command config are discovered as blocked command resources.
+`opencode.json` / `opencode.jsonc` command config are discovered as blocked
+command resources.
 
 Hooks follow the same safety model. Claude settings files with a top-level
 `hooks` field are discovered as hook resources, and `diff hook` / `sync hooks`
@@ -41,5 +42,5 @@ extensions so scan/status output can surface what was blocked without rendering
 or writing it.
 
 Plugins are discovered read-only when they appear in OpenCode plugin directories
-or `opencode.json` plugin config. They are blocked resources in the MVP and are
-not selectable for diff/sync rendering.
+or OpenCode JSON/JSONC plugin config. They are blocked resources in the MVP and
+are not selectable for diff/sync rendering.

@@ -198,3 +198,46 @@ fn scan_json_includes_opencode_plugins_as_blocked() {
                 .contains("\"plugin\"")
     }));
 }
+
+#[test]
+fn scan_json_includes_opencode_jsonc_config_resources() {
+    let dir = tempdir().unwrap();
+    fs::write(
+        dir.path().join("opencode.jsonc"),
+        r#"{
+  // OpenCode supports comments and trailing commas here.
+  "instructions": ["docs/rules.md"],
+  "command": {
+    "deploy": {
+      "template": "Deploy the app",
+    },
+  },
+  "plugin": ["opencode-wakatime"],
+}"#,
+    )
+    .unwrap();
+    fs::create_dir_all(dir.path().join("docs")).unwrap();
+    fs::write(dir.path().join("docs/rules.md"), "project rules\n").unwrap();
+
+    let output = Command::cargo_bin("agentsync")
+        .unwrap()
+        .current_dir(dir.path())
+        .args(["scan", "--format", "json"])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let json: Value = serde_json::from_slice(&output).unwrap();
+    let normalized = json["normalized"].as_array().unwrap();
+
+    assert!(normalized
+        .iter()
+        .any(|resource| resource["id"] == "rules:opencode:opencode.jsonc"));
+    assert!(normalized
+        .iter()
+        .any(|resource| resource["id"] == "commands:opencode:opencode.jsonc"));
+    assert!(normalized
+        .iter()
+        .any(|resource| resource["id"] == "plugins:opencode:opencode.jsonc"));
+}
