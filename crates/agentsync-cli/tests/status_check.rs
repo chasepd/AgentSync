@@ -28,6 +28,12 @@ fn status_check_fails_for_blocked_behavioral_resources() {
         r#"{"hooks":{"PreToolUse":[]}}"#,
     )
     .unwrap();
+    fs::create_dir_all(dir.path().join(".opencode/plugins")).unwrap();
+    fs::write(
+        dir.path().join(".opencode/plugins/notify.js"),
+        "export const Notify = async () => ({})\n",
+    )
+    .unwrap();
 
     Command::cargo_bin("agentsync")
         .unwrap()

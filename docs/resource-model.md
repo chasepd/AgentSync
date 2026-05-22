@@ -11,6 +11,7 @@ agent-specific details visible and recoverable.
 - `Subagent`: named custom agents and role definitions.
 - `Hook`: lifecycle automation and event handlers.
 - `Command`: reusable command prompts or command actions.
+- `Plugin`: executable extension modules or package references.
 
 ## Common Fields
 
@@ -38,3 +39,7 @@ return blocked plan actions until hook conversion has an explicit safety design.
 Blocked behavioral resources preserve their raw native file text in native
 extensions so scan/status output can surface what was blocked without rendering
 or writing it.
+
+Plugins are discovered read-only when they appear in OpenCode plugin directories
+or `opencode.json` plugin config. They are blocked resources in the MVP and are
+not selectable for diff/sync rendering.
