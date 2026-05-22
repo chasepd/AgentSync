@@ -51,6 +51,7 @@ pub enum ResourceKind {
     Hook,
     Command,
     Plugin,
+    Permission,
 }
 
 impl ResourceKind {
@@ -62,6 +63,7 @@ impl ResourceKind {
             Self::Hook => "hooks",
             Self::Command => "commands",
             Self::Plugin => "plugins",
+            Self::Permission => "permissions",
         }
     }
 }

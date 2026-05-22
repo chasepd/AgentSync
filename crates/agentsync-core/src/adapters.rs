@@ -140,6 +140,14 @@ impl AgentAdapter for ClaudeAdapter {
             [".claude/settings.json", ".claude/settings.local.json"],
             "hooks",
         );
+        discover_json_key_files(
+            &mut resources,
+            root,
+            self.agent(),
+            ResourceKind::Permission,
+            [".claude/settings.json", ".claude/settings.local.json"],
+            "permissions",
+        );
         Ok(resources)
     }
 
@@ -295,6 +303,14 @@ impl AgentAdapter for OpenCodeAdapter {
             OPENCODE_CONFIG_FILES,
             "plugin",
         );
+        discover_json_key_files(
+            &mut resources,
+            root,
+            self.agent(),
+            ResourceKind::Permission,
+            OPENCODE_CONFIG_FILES,
+            "permission",
+        );
         Ok(resources)
     }
 
@@ -324,6 +340,7 @@ fn portable_capabilities(agent: Agent) -> AdapterCapabilities {
     resources.insert(ResourceKind::Hook, SupportLevel::Blocked);
     resources.insert(ResourceKind::Command, SupportLevel::Blocked);
     resources.insert(ResourceKind::Plugin, SupportLevel::Blocked);
+    resources.insert(ResourceKind::Permission, SupportLevel::Blocked);
 
     let mut fields = BTreeMap::new();
     fields.insert("rules.body".to_string(), SupportLevel::Portable);
@@ -476,9 +493,10 @@ fn normalize_native(
             Ok(blocked_behavior(root, native))
         }
         ResourceKind::Subagent => normalize_subagent(root, native),
-        ResourceKind::Hook | ResourceKind::Command | ResourceKind::Plugin => {
-            Ok(blocked_behavior(root, native))
-        }
+        ResourceKind::Hook
+        | ResourceKind::Command
+        | ResourceKind::Plugin
+        | ResourceKind::Permission => Ok(blocked_behavior(root, native)),
     }
 }
 
@@ -958,6 +976,10 @@ mod tests {
             capabilities.resources.get(&ResourceKind::Plugin),
             Some(&SupportLevel::Blocked)
         );
+        assert_eq!(
+            capabilities.resources.get(&ResourceKind::Permission),
+            Some(&SupportLevel::Blocked)
+        );
     }
 
     #[test]
@@ -1013,6 +1035,36 @@ mod tests {
         assert!(!resources
             .iter()
             .any(|resource| resource.kind == ResourceKind::Hook));
+    }
+
+    #[test]
+    fn claude_settings_permissions_are_discovered_as_blocked_behavior() {
+        let dir = tempdir().unwrap();
+        fs::create_dir_all(dir.path().join(".claude")).unwrap();
+        fs::write(
+            dir.path().join(".claude/settings.json"),
+            r#"{"permissions":{"allow":["Bash(git status)"]}}"#,
+        )
+        .unwrap();
+
+        let resources = ClaudeAdapter.discover(dir.path(), Scope::Project).unwrap();
+        let permission = resources
+            .iter()
+            .find(|resource| {
+                resource.kind == ResourceKind::Permission
+                    && resource.path == Path::new(".claude/settings.json")
+            })
+            .unwrap();
+        let resource = ClaudeAdapter.read(dir.path(), permission).unwrap();
+
+        assert_eq!(resource.id, "permissions:claude:.claude/settings.json");
+        assert_eq!(resource.support, SupportLevel::Blocked);
+        assert!(resource
+            .native_extensions
+            .get("native.raw")
+            .and_then(Value::as_str)
+            .unwrap()
+            .contains("\"permissions\""));
     }
 
     #[test]
@@ -1166,6 +1218,44 @@ mod tests {
             .and_then(Value::as_str)
             .unwrap()
             .contains("\"agent\""));
+    }
+
+    #[test]
+    fn opencode_permissions_are_discovered_as_blocked_behavior() {
+        let dir = tempdir().unwrap();
+        fs::write(
+            dir.path().join("opencode.jsonc"),
+            r#"{
+  "permission": {
+    "edit": "ask",
+    "bash": {
+      "git status": "allow",
+    },
+  },
+}"#,
+        )
+        .unwrap();
+
+        let resources = OpenCodeAdapter
+            .discover(dir.path(), Scope::Project)
+            .unwrap();
+        let permission = resources
+            .iter()
+            .find(|resource| {
+                resource.kind == ResourceKind::Permission
+                    && resource.path == Path::new("opencode.jsonc")
+            })
+            .unwrap();
+        let resource = OpenCodeAdapter.read(dir.path(), permission).unwrap();
+
+        assert_eq!(resource.id, "permissions:opencode:opencode.jsonc");
+        assert_eq!(resource.support, SupportLevel::Blocked);
+        assert!(resource
+            .native_extensions
+            .get("native.raw")
+            .and_then(Value::as_str)
+            .unwrap()
+            .contains("\"permission\""));
     }
 
     #[test]

@@ -12,6 +12,7 @@ agent-specific details visible and recoverable.
 - `Hook`: lifecycle automation and event handlers.
 - `Command`: reusable command prompts or command actions.
 - `Plugin`: executable extension modules or package references.
+- `Permission`: sandbox, tool, or command permission policy.
 
 ## Common Fields
 
@@ -46,3 +47,7 @@ or writing it.
 Plugins are discovered read-only when they appear in OpenCode plugin directories
 or OpenCode JSON/JSONC plugin config. They are blocked resources in the MVP and
 are not selectable for diff/sync rendering.
+
+Permission policy is discovered read-only from Claude settings and OpenCode
+JSON/JSONC config. It is blocked in the MVP because permission semantics are
+safety-critical and not portable across agents yet.
