@@ -376,6 +376,9 @@ fn normalize_rule(
     root: &Path,
     native: &NativeResource,
 ) -> Result<NormalizedResource, AgentSyncError> {
+    if native.agent == Agent::OpenCode && native.path == Path::new("opencode.json") {
+        return normalize_opencode_config_rules(root, native);
+    }
     let body = fs::read_to_string(root.join(&native.path))?;
     Ok(NormalizedResource {
         id: if native.path == Path::new("AGENTS.md") {
@@ -393,6 +396,129 @@ fn normalize_rule(
         diagnostics: Vec::new(),
         support: SupportLevel::Portable,
     })
+}
+
+fn normalize_opencode_config_rules(
+    root: &Path,
+    native: &NativeResource,
+) -> Result<NormalizedResource, AgentSyncError> {
+    let raw = fs::read_to_string(root.join(&native.path))?;
+    let config = serde_json::from_str::<Value>(&raw).map_err(|error| {
+        AgentSyncError::Adapter(format!("failed to parse opencode.json as JSON: {error}"))
+    })?;
+    let mut diagnostics = Vec::new();
+    let mut support = SupportLevel::Portable;
+    let mut body_parts = Vec::new();
+    let mut native_paths = vec![native.path.clone()];
+
+    match config.get("instructions") {
+        Some(Value::Array(instructions)) => {
+            for instruction in instructions {
+                let Some(path) = instruction.as_str() else {
+                    support = SupportLevel::Partial;
+                    diagnostics.push(opencode_instruction_diagnostic(
+                        native,
+                        "opencode.json contains a non-string instruction entry",
+                    ));
+                    continue;
+                };
+                if has_glob_pattern(path) {
+                    support = SupportLevel::Partial;
+                    diagnostics.push(opencode_instruction_diagnostic(
+                        native,
+                        &format!(
+                            "opencode.json instruction pattern {path:?} uses a glob, which is not expanded in the MVP"
+                        ),
+                    ));
+                    continue;
+                }
+                let rel = Path::new(path);
+                if rel.is_absolute()
+                    || rel
+                        .components()
+                        .any(|component| matches!(component, std::path::Component::ParentDir))
+                {
+                    support = SupportLevel::Partial;
+                    diagnostics.push(opencode_instruction_diagnostic(
+                        native,
+                        &format!(
+                            "opencode.json instruction path {path:?} must stay inside the project"
+                        ),
+                    ));
+                    continue;
+                }
+                let abs = root.join(rel);
+                match fs::read_to_string(&abs) {
+                    Ok(contents) => {
+                        native_paths.push(rel.to_path_buf());
+                        body_parts.push(format!("<!-- {} -->\n{}", rel.display(), contents));
+                    }
+                    Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                        support = SupportLevel::Partial;
+                        diagnostics.push(opencode_instruction_diagnostic(
+                            native,
+                            &format!("opencode.json instruction file {path:?} was not found"),
+                        ));
+                    }
+                    Err(error) if error.kind() == std::io::ErrorKind::InvalidData => {
+                        support = SupportLevel::Partial;
+                        diagnostics.push(opencode_instruction_diagnostic(
+                            native,
+                            &format!("opencode.json instruction file {path:?} is not UTF-8"),
+                        ));
+                    }
+                    Err(error) => return Err(error.into()),
+                }
+            }
+        }
+        Some(_) => {
+            support = SupportLevel::Partial;
+            diagnostics.push(opencode_instruction_diagnostic(
+                native,
+                "opencode.json instructions field must be an array",
+            ));
+        }
+        None => {
+            support = SupportLevel::Partial;
+            diagnostics.push(opencode_instruction_diagnostic(
+                native,
+                "opencode.json does not define instructions",
+            ));
+        }
+    }
+
+    native_paths.sort();
+    native_paths.dedup();
+    let mut native_extensions = BTreeMap::new();
+    native_extensions.insert("opencode.config".to_string(), config);
+    Ok(NormalizedResource {
+        id: native.id.clone(),
+        kind: ResourceKind::RuleSet,
+        scope: native.scope,
+        source_agent: native.agent,
+        native_paths,
+        rule_set: Some(RuleSet {
+            body: body_parts.join("\n\n"),
+        }),
+        skill: None,
+        native_extensions,
+        diagnostics,
+        support,
+    })
+}
+
+fn opencode_instruction_diagnostic(native: &NativeResource, message: &str) -> Diagnostic {
+    Diagnostic {
+        severity: DiagnosticSeverity::Warning,
+        resource_id: Some(native.id.clone()),
+        resource_kind: Some(ResourceKind::RuleSet),
+        agent: Some(native.agent),
+        message: message.to_string(),
+    }
+}
+
+fn has_glob_pattern(path: &str) -> bool {
+    path.contains('*') || path.contains('?') || path.contains('[')
 }
 
 fn normalize_skill(
@@ -676,5 +802,67 @@ mod tests {
         assert!(diagnostics.is_empty());
         assert_eq!(files[0].path, Path::new(".cursor/rules/agentsync.md"));
         assert_eq!(files[0].contents, "rules\n");
+    }
+
+    #[test]
+    fn opencode_config_reads_literal_instruction_files() {
+        let dir = tempdir().unwrap();
+        fs::write(
+            dir.path().join("opencode.json"),
+            r#"{"instructions":["docs/rules.md"]}"#,
+        )
+        .unwrap();
+        fs::create_dir_all(dir.path().join("docs")).unwrap();
+        fs::write(dir.path().join("docs/rules.md"), "project rules\n").unwrap();
+        let native = NativeResource {
+            id: "rules:opencode:opencode.json".to_string(),
+            agent: Agent::OpenCode,
+            kind: ResourceKind::RuleSet,
+            scope: Scope::Project,
+            path: PathBuf::from("opencode.json"),
+        };
+
+        let resource = OpenCodeAdapter.read(dir.path(), &native).unwrap();
+
+        assert_eq!(resource.support, SupportLevel::Portable);
+        assert!(resource.diagnostics.is_empty());
+        assert_eq!(
+            resource.rule_set.unwrap().body,
+            "<!-- docs/rules.md -->\nproject rules\n"
+        );
+        assert_eq!(
+            resource.native_paths,
+            vec![
+                PathBuf::from("docs/rules.md"),
+                PathBuf::from("opencode.json")
+            ]
+        );
+        assert!(resource.native_extensions.contains_key("opencode.config"));
+    }
+
+    #[test]
+    fn opencode_config_marks_glob_instruction_partial() {
+        let dir = tempdir().unwrap();
+        fs::write(
+            dir.path().join("opencode.json"),
+            r#"{"instructions":["docs/*.md"]}"#,
+        )
+        .unwrap();
+        let native = NativeResource {
+            id: "rules:opencode:opencode.json".to_string(),
+            agent: Agent::OpenCode,
+            kind: ResourceKind::RuleSet,
+            scope: Scope::Project,
+            path: PathBuf::from("opencode.json"),
+        };
+
+        let resource = OpenCodeAdapter.read(dir.path(), &native).unwrap();
+
+        assert_eq!(resource.support, SupportLevel::Partial);
+        assert!(resource.rule_set.unwrap().body.is_empty());
+        assert!(resource
+            .diagnostics
+            .iter()
+            .any(|diagnostic| diagnostic.message.contains("uses a glob")));
     }
 }
