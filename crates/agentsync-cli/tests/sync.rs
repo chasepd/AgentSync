@@ -146,6 +146,34 @@ fn diff_json_outputs_structured_plan() {
 }
 
 #[test]
+fn diff_format_json_outputs_structured_plan() {
+    let dir = tempdir().unwrap();
+    fs::write(dir.path().join("AGENTS.md"), "repo rules\n").unwrap();
+
+    let output = Command::cargo_bin("agentsync")
+        .unwrap()
+        .current_dir(dir.path())
+        .args([
+            "diff",
+            "rules",
+            "--from",
+            "agents-md",
+            "--to",
+            "claude",
+            "--format",
+            "json",
+        ])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let json: Value = serde_json::from_slice(&output).unwrap();
+
+    assert_eq!(json["actions"][0]["action"], "create");
+}
+
+#[test]
 fn diff_uses_config_defaults_when_from_and_to_are_omitted() {
     let dir = tempdir().unwrap();
     fs::create_dir_all(dir.path().join(".agentsync")).unwrap();
@@ -325,6 +353,36 @@ fn sync_json_without_write_outputs_json_and_does_not_write() {
             "--to",
             "claude",
             "--json",
+        ])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let json: Value = serde_json::from_slice(&output).unwrap();
+
+    assert_eq!(json["actions"][0]["action"], "create");
+    assert!(!dir.path().join("CLAUDE.md").exists());
+    assert!(!dir.path().join(".agentsync/state.json").exists());
+}
+
+#[test]
+fn sync_format_json_outputs_json_and_does_not_write() {
+    let dir = tempdir().unwrap();
+    fs::write(dir.path().join("AGENTS.md"), "repo rules\n").unwrap();
+
+    let output = Command::cargo_bin("agentsync")
+        .unwrap()
+        .current_dir(dir.path())
+        .args([
+            "sync",
+            "rules",
+            "--from",
+            "agents-md",
+            "--to",
+            "claude",
+            "--format",
+            "json",
         ])
         .assert()
         .success()

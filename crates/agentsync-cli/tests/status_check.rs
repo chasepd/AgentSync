@@ -52,6 +52,26 @@ fn status_json_outputs_structured_report() {
 }
 
 #[test]
+fn status_format_json_outputs_structured_report() {
+    let dir = tempdir().unwrap();
+    fs::write(dir.path().join("AGENTS.md"), "repo rules\n").unwrap();
+
+    let output = Command::cargo_bin("agentsync")
+        .unwrap()
+        .current_dir(dir.path())
+        .args(["status", "--format", "json", "--check"])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let json: Value = serde_json::from_slice(&output).unwrap();
+
+    assert_eq!(json["scope"], "project");
+    assert_eq!(json["items"][0]["state"], "untracked");
+}
+
+#[test]
 fn status_uses_config_scope_when_scope_is_omitted() {
     let dir = tempdir().unwrap();
     fs::create_dir_all(dir.path().join(".agentsync")).unwrap();

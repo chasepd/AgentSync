@@ -366,6 +366,7 @@ agentsync scan
 agentsync scan --scope user
 agentsync scan --scope project
 agentsync scan --json
+agentsync scan --format json
 ```
 
 ### `status`
@@ -385,6 +386,7 @@ Preview changes.
 
 ```bash
 agentsync diff --from claude --to codex
+agentsync diff rules --from claude --to codex --format json
 agentsync diff subagent security-reviewer --from claude --to opencode
 ```
 
@@ -395,6 +397,7 @@ Generate or update target formats.
 ```bash
 agentsync sync --from claude --to codex,opencode --dry-run
 agentsync sync --from claude --to codex,opencode --write
+agentsync sync rules --from claude --to codex --format json
 agentsync sync skill pr-review --from claude --to codex --write
 ```
 
@@ -404,6 +407,7 @@ Validate local setup.
 
 ```bash
 agentsync doctor
+agentsync doctor --format json
 ```
 
 Checks include:

@@ -65,3 +65,27 @@ fn explicit_scan_scope_does_not_require_valid_config() {
 
     assert_eq!(json["scope"], "project");
 }
+
+#[test]
+fn scan_format_json_outputs_structured_report() {
+    let dir = tempdir().unwrap();
+    fs::write(dir.path().join("AGENTS.md"), "repo rules\n").unwrap();
+
+    let output = Command::cargo_bin("agentsync")
+        .unwrap()
+        .current_dir(dir.path())
+        .args(["scan", "--format", "json"])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let json: Value = serde_json::from_slice(&output).unwrap();
+
+    assert_eq!(json["scope"], "project");
+    assert!(json["resources"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|resource| resource["path"] == "AGENTS.md"));
+}

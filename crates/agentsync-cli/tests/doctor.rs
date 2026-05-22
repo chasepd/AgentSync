@@ -26,6 +26,26 @@ fn doctor_json_reports_missing_state_as_non_blocking() {
 }
 
 #[test]
+fn doctor_format_json_reports_missing_state_as_non_blocking() {
+    let dir = tempdir().unwrap();
+    fs::write(dir.path().join("AGENTS.md"), "repo rules\n").unwrap();
+
+    let output = Command::cargo_bin("agentsync")
+        .unwrap()
+        .current_dir(dir.path())
+        .args(["doctor", "--format", "json", "--check"])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let json: Value = serde_json::from_slice(&output).unwrap();
+
+    assert_eq!(json["state_present"], false);
+    assert_eq!(json["state_valid"], true);
+}
+
+#[test]
 fn doctor_check_fails_for_invalid_state() {
     let dir = tempdir().unwrap();
     fs::create_dir_all(dir.path().join(".agentsync")).unwrap();
