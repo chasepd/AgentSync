@@ -742,8 +742,11 @@ fn save_state_from_plan(root: &Path, report: &PlanReport) -> Result<(), AgentSyn
         let source_checksum = normalized_checksum(source)?;
         if let Some(entry) = state.resource_mut(&source.id) {
             entry.kind = source.kind;
+            entry.source_agent = Some(source.source_agent);
             entry.source_paths = source.native_paths.clone();
             entry.source_checksum = source_checksum;
+            entry.diagnostics = source.diagnostics.clone();
+            entry.native_extensions = source.native_extensions.clone();
             entry.last_synced_at = now.clone();
             for target in targets {
                 entry.upsert_target(target);
@@ -752,9 +755,12 @@ fn save_state_from_plan(root: &Path, report: &PlanReport) -> Result<(), AgentSyn
             state.resources.push(StateResource {
                 resource_id: source.id.clone(),
                 kind: source.kind,
+                source_agent: Some(source.source_agent),
                 source_paths: source.native_paths.clone(),
                 source_checksum,
                 targets,
+                diagnostics: source.diagnostics.clone(),
+                native_extensions: source.native_extensions.clone(),
                 last_synced_at: now.clone(),
             });
         }
@@ -1007,6 +1013,40 @@ mod tests {
             .targets
             .iter()
             .any(|target| target.path == Path::new(".cursor/rules/agentsync.md")));
+    }
+
+    #[test]
+    fn sync_state_records_source_metadata() {
+        let dir = tempdir().unwrap();
+        fs::write(dir.path().join("README.md"), "readme rules\n").unwrap();
+        fs::write(
+            dir.path().join("opencode.json"),
+            r#"{"instructions":["README.md","*.md"]}"#,
+        )
+        .unwrap();
+
+        let report = plan(
+            dir.path(),
+            ResourceSelector::Rules,
+            SourceAlias::OpenCode,
+            &[Agent::Claude],
+        )
+        .unwrap();
+        write_plan(dir.path(), &report).unwrap();
+
+        let state = load_state(dir.path()).unwrap();
+        let entry = state
+            .resources
+            .iter()
+            .find(|entry| entry.resource_id == "rules:opencode:opencode.json")
+            .unwrap();
+
+        assert_eq!(entry.source_agent, Some(Agent::OpenCode));
+        assert!(entry
+            .diagnostics
+            .iter()
+            .any(|diagnostic| diagnostic.message.contains("uses a glob")));
+        assert!(entry.native_extensions.contains_key("opencode.config"));
     }
 
     #[test]

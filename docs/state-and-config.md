@@ -60,6 +60,7 @@ that need config defaults to fail before planning writes.
 `.agentsync/state.json` records relationships between native files:
 
 - resource id and kind
+- source agent
 - source and target agents
 - native paths
 - content checksums
