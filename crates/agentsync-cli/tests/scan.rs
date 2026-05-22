@@ -91,6 +91,36 @@ fn scan_format_json_outputs_structured_report() {
 }
 
 #[test]
+fn scan_table_groups_resources_by_kind() {
+    let dir = tempdir().unwrap();
+    fs::write(dir.path().join("AGENTS.md"), "repo rules\n").unwrap();
+    fs::create_dir_all(dir.path().join(".claude/skills/review")).unwrap();
+    fs::write(
+        dir.path().join(".claude/skills/review/SKILL.md"),
+        "---\nname: review\n---\nBody\n",
+    )
+    .unwrap();
+
+    let output = Command::cargo_bin("agentsync")
+        .unwrap()
+        .current_dir(dir.path())
+        .args(["scan"])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let text = String::from_utf8(output).unwrap();
+
+    let rules = text.find("\nrules\n").unwrap();
+    let skills = text.find("\nskills\n").unwrap();
+    assert!(rules < skills);
+    assert!(text.contains("  codex    AGENTS.md\n"));
+    assert!(text.contains("  claude   .claude/skills/review/SKILL.md\n"));
+    assert!(!text.contains("rules      codex"));
+}
+
+#[test]
 fn scan_json_includes_normalized_subagent_fields() {
     let dir = tempdir().unwrap();
     fs::create_dir_all(dir.path().join(".claude/agents")).unwrap();
