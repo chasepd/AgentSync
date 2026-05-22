@@ -41,6 +41,9 @@ pub enum AgentSyncError {
     #[error("serialization error: {0}")]
     SerdeJson(#[from] serde_json::Error),
 
+    #[error("toml error: {0}")]
+    TomlDe(#[from] toml::de::Error),
+
     #[error("invalid argument: {0}")]
     InvalidArgument(String),
 }

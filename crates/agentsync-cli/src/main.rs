@@ -35,7 +35,7 @@ enum Command {
         resource: CliResource,
 
         #[arg(long)]
-        from: CliSource,
+        from: Option<CliSource>,
 
         #[arg(long, value_delimiter = ',')]
         to: Vec<CliAgent>,
@@ -48,7 +48,7 @@ enum Command {
         resource: CliResource,
 
         #[arg(long)]
-        from: CliSource,
+        from: Option<CliSource>,
 
         #[arg(long, value_delimiter = ',')]
         to: Vec<CliAgent>,
@@ -195,13 +195,9 @@ fn main() -> Result<(), AgentSyncError> {
             to,
             json,
         } => {
-            let targets = to.into_iter().map(Agent::from).collect::<Vec<_>>();
-            let report = agentsync_core::plan(
-                std::env::current_dir()?,
-                resource.into(),
-                from.into(),
-                &targets,
-            )?;
+            let (from, targets) = resolve_plan_args(from, to)?;
+            let report =
+                agentsync_core::plan(std::env::current_dir()?, resource.into(), from, &targets)?;
             if json {
                 println!("{}", serde_json::to_string_pretty(&report)?);
             } else {
@@ -216,13 +212,9 @@ fn main() -> Result<(), AgentSyncError> {
             write,
             json,
         } => {
-            let targets = to.into_iter().map(Agent::from).collect::<Vec<_>>();
-            let report = agentsync_core::plan(
-                std::env::current_dir()?,
-                resource.into(),
-                from.into(),
-                &targets,
-            )?;
+            let (from, targets) = resolve_plan_args(from, to)?;
+            let report =
+                agentsync_core::plan(std::env::current_dir()?, resource.into(), from, &targets)?;
             if json {
                 println!("{}", serde_json::to_string_pretty(&report)?);
             } else {
@@ -268,4 +260,42 @@ fn main() -> Result<(), AgentSyncError> {
     }
 
     Ok(())
+}
+
+fn resolve_plan_args(
+    from: Option<CliSource>,
+    to: Vec<CliAgent>,
+) -> Result<(SourceAlias, Vec<Agent>), AgentSyncError> {
+    let needs_config = from.is_none() || to.is_empty();
+    let config = if needs_config {
+        agentsync_core::config::load_config(std::env::current_dir()?)?
+    } else {
+        None
+    };
+    let source = if let Some(source) = from {
+        SourceAlias::from(source)
+    } else {
+        config
+            .as_ref()
+            .and_then(|config| config.defaults.source)
+            .ok_or_else(|| {
+                AgentSyncError::InvalidArgument(
+                    "missing --from and no defaults.source in .agentsync/config.toml".to_string(),
+                )
+            })?
+    };
+    let targets = if to.is_empty() {
+        config
+            .as_ref()
+            .map(|config| config.defaults.targets.clone())
+            .unwrap_or_default()
+    } else {
+        to.into_iter().map(Agent::from).collect()
+    };
+    if targets.is_empty() {
+        return Err(AgentSyncError::InvalidArgument(
+            "missing --to and no defaults.targets in .agentsync/config.toml".to_string(),
+        ));
+    }
+    Ok((source, targets))
 }

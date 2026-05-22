@@ -49,3 +49,32 @@ fn doctor_check_fails_for_invalid_state() {
         .unwrap()
         .contains("failed to load"));
 }
+
+#[test]
+fn doctor_check_fails_for_invalid_config() {
+    let dir = tempdir().unwrap();
+    fs::create_dir_all(dir.path().join(".agentsync")).unwrap();
+    fs::write(
+        dir.path().join(".agentsync/config.toml"),
+        "schema_version = 2\n",
+    )
+    .unwrap();
+
+    let output = Command::cargo_bin("agentsync")
+        .unwrap()
+        .current_dir(dir.path())
+        .args(["doctor", "--json", "--check"])
+        .assert()
+        .failure()
+        .get_output()
+        .stdout
+        .clone();
+    let json: Value = serde_json::from_slice(&output).unwrap();
+
+    assert_eq!(json["config_present"], true);
+    assert_eq!(json["config_valid"], false);
+    assert!(json["diagnostics"][0]["message"]
+        .as_str()
+        .unwrap()
+        .contains("failed to load .agentsync/config.toml"));
+}

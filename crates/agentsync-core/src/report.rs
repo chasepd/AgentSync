@@ -222,6 +222,9 @@ pub enum InitActionKind {
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct DoctorReport {
     pub root: PathBuf,
+    pub config_path: PathBuf,
+    pub config_present: bool,
+    pub config_valid: bool,
     pub state_path: PathBuf,
     pub state_present: bool,
     pub state_valid: bool,
@@ -234,13 +237,27 @@ pub struct DoctorReport {
 
 impl DoctorReport {
     pub fn has_blocking_issues(&self) -> bool {
-        !self.state_valid
+        !self.config_valid
+            || !self.state_valid
             || self.blocking_status_count > 0
             || self.diagnostics.iter().any(Diagnostic::is_blocking)
     }
 
     pub fn to_text(&self) -> String {
         let mut out = format!("AgentSync doctor ({})\n", self.root.display());
+        out.push_str(&format!("config: {}\n", self.config_path.display()));
+        out.push_str(&format!(
+            "config_status: {}\n",
+            if self.config_present {
+                if self.config_valid {
+                    "valid"
+                } else {
+                    "invalid"
+                }
+            } else {
+                "missing"
+            }
+        ));
         out.push_str(&format!("state: {}\n", self.state_path.display()));
         out.push_str(&format!(
             "state_status: {}\n",

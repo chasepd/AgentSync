@@ -1,4 +1,5 @@
 pub mod adapters;
+pub mod config;
 pub mod diagnostics;
 pub mod model;
 pub mod report;
@@ -10,6 +11,7 @@ use std::path::{Path, PathBuf};
 
 use adapters::built_in_adapters;
 use chrono::Utc;
+use config::{config_path, load_config};
 use model::{NativeResource, NormalizedResource, SupportLevel};
 use report::{
     DoctorReport, DriftState, InitActionKind, InitReport, PlanAction, PlanActionKind, PlanReport,
@@ -119,11 +121,27 @@ pub fn write_init(root: impl AsRef<Path>, report: &InitReport) -> Result<(), Age
 pub fn doctor_root(root: impl AsRef<Path>) -> Result<DoctorReport, AgentSyncError> {
     let root = root.as_ref();
     let scan = scan_root(root, Scope::Project)?;
+    let config_path = config_path(root);
+    let config_present = config_path.exists();
+    let mut config_valid = true;
     let state_path = root.join(".agentsync/state.json");
     let state_present = state_path.exists();
     let mut state_valid = true;
     let mut tracked_resource_count = 0;
     let mut diagnostics = scan.diagnostics.clone();
+
+    if config_present {
+        if let Err(error) = load_config(root) {
+            config_valid = false;
+            diagnostics.push(Diagnostic {
+                severity: DiagnosticSeverity::Error,
+                resource_id: None,
+                resource_kind: None,
+                agent: None,
+                message: format!("failed to load .agentsync/config.toml: {error}"),
+            });
+        }
+    }
 
     if state_present {
         match load_state(root) {
@@ -153,6 +171,9 @@ pub fn doctor_root(root: impl AsRef<Path>) -> Result<DoctorReport, AgentSyncErro
 
     Ok(DoctorReport {
         root: root.to_path_buf(),
+        config_path,
+        config_present,
+        config_valid,
         state_path,
         state_present,
         state_valid,
