@@ -102,6 +102,65 @@ fn sync_skills_write_creates_text_assets() {
 }
 
 #[test]
+fn diff_fails_for_unsupported_state_version() {
+    let dir = tempdir().unwrap();
+    fs::create_dir_all(dir.path().join(".agentsync")).unwrap();
+    fs::write(dir.path().join("AGENTS.md"), "repo rules\n").unwrap();
+    fs::write(
+        dir.path().join(".agentsync/state.json"),
+        r#"{"version":2,"resources":[]}"#,
+    )
+    .unwrap();
+
+    let output = Command::cargo_bin("agentsync")
+        .unwrap()
+        .current_dir(dir.path())
+        .args(["diff", "rules", "--from", "agents-md", "--to", "claude"])
+        .assert()
+        .failure()
+        .get_output()
+        .stderr
+        .clone();
+    let stderr = String::from_utf8(output).unwrap();
+
+    assert!(stderr.contains("unsupported state version 2; expected 1"));
+}
+
+#[test]
+fn sync_write_fails_for_unsupported_state_version_without_writing_target() {
+    let dir = tempdir().unwrap();
+    fs::create_dir_all(dir.path().join(".agentsync")).unwrap();
+    fs::write(dir.path().join("AGENTS.md"), "repo rules\n").unwrap();
+    fs::write(
+        dir.path().join(".agentsync/state.json"),
+        r#"{"version":2,"resources":[]}"#,
+    )
+    .unwrap();
+
+    let output = Command::cargo_bin("agentsync")
+        .unwrap()
+        .current_dir(dir.path())
+        .args([
+            "sync",
+            "rules",
+            "--from",
+            "agents-md",
+            "--to",
+            "claude",
+            "--write",
+        ])
+        .assert()
+        .failure()
+        .get_output()
+        .stderr
+        .clone();
+    let stderr = String::from_utf8(output).unwrap();
+
+    assert!(stderr.contains("unsupported state version 2; expected 1"));
+    assert!(!dir.path().join("CLAUDE.md").exists());
+}
+
+#[test]
 fn cursor_cli_alias_is_accepted_for_targets() {
     let dir = tempdir().unwrap();
     fs::write(dir.path().join("AGENTS.md"), "repo rules\n").unwrap();
