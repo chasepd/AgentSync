@@ -136,6 +136,15 @@ pub enum ResourceSelector {
     Skills,
 }
 
+impl ResourceSelector {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Rules => "rules",
+            Self::Skills => "skills",
+        }
+    }
+}
+
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum SourceAlias {

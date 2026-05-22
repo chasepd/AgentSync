@@ -320,6 +320,10 @@ agentsync diff rules
 agentsync sync rules --write
 ```
 
+`[sync]` toggles gate config-driven planning for that resource kind, so setting
+`rules = false` or `skills = false` blocks those default-based commands before
+any write.
+
 ## Conversion notes
 
 Not every agent feature maps perfectly.

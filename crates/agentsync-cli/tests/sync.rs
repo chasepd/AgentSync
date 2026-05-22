@@ -216,6 +216,68 @@ targets = ["claude"]
 }
 
 #[test]
+fn diff_config_defaults_respect_disabled_rules_sync() {
+    let dir = tempdir().unwrap();
+    fs::create_dir_all(dir.path().join(".agentsync")).unwrap();
+    fs::write(dir.path().join("AGENTS.md"), "repo rules\n").unwrap();
+    fs::write(
+        dir.path().join(".agentsync/config.toml"),
+        r#"schema_version = 1
+
+[defaults]
+source = "agents-md"
+targets = ["claude"]
+
+[sync]
+rules = false
+"#,
+    )
+    .unwrap();
+
+    Command::cargo_bin("agentsync")
+        .unwrap()
+        .current_dir(dir.path())
+        .args(["diff", "rules"])
+        .assert()
+        .failure();
+}
+
+#[test]
+fn sync_config_defaults_respect_disabled_skills_sync_without_writing() {
+    let dir = tempdir().unwrap();
+    fs::create_dir_all(dir.path().join(".agentsync")).unwrap();
+    fs::create_dir_all(dir.path().join(".claude/skills/review")).unwrap();
+    fs::write(
+        dir.path().join(".claude/skills/review/SKILL.md"),
+        "---\nname: review\n---\nBody\n",
+    )
+    .unwrap();
+    fs::write(
+        dir.path().join(".agentsync/config.toml"),
+        r#"schema_version = 1
+
+[defaults]
+source = "claude"
+targets = ["codex"]
+
+[sync]
+skills = false
+"#,
+    )
+    .unwrap();
+
+    Command::cargo_bin("agentsync")
+        .unwrap()
+        .current_dir(dir.path())
+        .args(["sync", "skills", "--write"])
+        .assert()
+        .failure();
+
+    assert!(!dir.path().join(".codex/skills/review/SKILL.md").exists());
+    assert!(!dir.path().join(".agentsync/state.json").exists());
+}
+
+#[test]
 fn diff_without_cli_args_or_config_defaults_fails() {
     let dir = tempdir().unwrap();
     fs::write(dir.path().join("AGENTS.md"), "repo rules\n").unwrap();
