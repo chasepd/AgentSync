@@ -31,10 +31,13 @@ rules = true
 skills = true
 ```
 
-When present, `defaults.source` and `defaults.targets` are used by `diff` and
-`sync` if `--from` or `--to` are omitted:
+When present, `defaults.scope` is used by `scan` and `status` if `--scope` is
+omitted. `defaults.source` and `defaults.targets` are used by `diff` and `sync`
+if `--from` or `--to` are omitted:
 
 ```bash
+agentsync scan
+agentsync status
 agentsync diff rules
 agentsync sync rules --write
 ```
