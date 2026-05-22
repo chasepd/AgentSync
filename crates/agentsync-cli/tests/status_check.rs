@@ -52,6 +52,62 @@ fn status_json_outputs_structured_report() {
 }
 
 #[test]
+fn status_uses_config_scope_when_scope_is_omitted() {
+    let dir = tempdir().unwrap();
+    fs::create_dir_all(dir.path().join(".agentsync")).unwrap();
+    fs::write(
+        dir.path().join(".agentsync/config.toml"),
+        r#"schema_version = 1
+
+[defaults]
+scope = "user"
+"#,
+    )
+    .unwrap();
+
+    let output = Command::cargo_bin("agentsync")
+        .unwrap()
+        .current_dir(dir.path())
+        .args(["status", "--json", "--check"])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let json: Value = serde_json::from_slice(&output).unwrap();
+
+    assert_eq!(json["scope"], "user");
+    assert!(json["diagnostics"][0]["message"]
+        .as_str()
+        .unwrap()
+        .contains("user scope scanning is not implemented yet"));
+}
+
+#[test]
+fn explicit_status_scope_does_not_require_valid_config() {
+    let dir = tempdir().unwrap();
+    fs::create_dir_all(dir.path().join(".agentsync")).unwrap();
+    fs::write(
+        dir.path().join(".agentsync/config.toml"),
+        "schema_version = 2\n",
+    )
+    .unwrap();
+
+    let output = Command::cargo_bin("agentsync")
+        .unwrap()
+        .current_dir(dir.path())
+        .args(["status", "--scope", "project", "--json", "--check"])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let json: Value = serde_json::from_slice(&output).unwrap();
+
+    assert_eq!(json["scope"], "project");
+}
+
+#[test]
 fn status_check_reports_missing_synced_target() {
     let dir = tempdir().unwrap();
     fs::write(dir.path().join("AGENTS.md"), "repo rules\n").unwrap();

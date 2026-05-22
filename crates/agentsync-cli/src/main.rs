@@ -13,16 +13,16 @@ struct Cli {
 enum Command {
     /// Discover native agent configuration.
     Scan {
-        #[arg(long, default_value_t = CliScope::Project)]
-        scope: CliScope,
+        #[arg(long)]
+        scope: Option<CliScope>,
 
         #[arg(long)]
         json: bool,
     },
     /// Show missing formats and drift.
     Status {
-        #[arg(long, default_value_t = CliScope::Project)]
-        scope: CliScope,
+        #[arg(long)]
+        scope: Option<CliScope>,
 
         #[arg(long)]
         check: bool,
@@ -169,7 +169,7 @@ fn main() -> Result<(), AgentSyncError> {
 
     match cli.command {
         Command::Scan { scope, json } => {
-            let scope: Scope = scope.into();
+            let scope = resolve_scope(scope)?;
             let report = agentsync_core::scan(scope)?;
             if json {
                 println!("{}", serde_json::to_string_pretty(&report)?);
@@ -178,7 +178,7 @@ fn main() -> Result<(), AgentSyncError> {
             }
         }
         Command::Status { scope, check, json } => {
-            let scope: Scope = scope.into();
+            let scope = resolve_scope(scope)?;
             let report = agentsync_core::status(scope)?;
             if json {
                 println!("{}", serde_json::to_string_pretty(&report)?);
@@ -260,6 +260,17 @@ fn main() -> Result<(), AgentSyncError> {
     }
 
     Ok(())
+}
+
+fn resolve_scope(scope: Option<CliScope>) -> Result<Scope, AgentSyncError> {
+    if let Some(scope) = scope {
+        return Ok(scope.into());
+    }
+    Ok(
+        agentsync_core::config::load_config(std::env::current_dir()?)?
+            .and_then(|config| config.defaults.scope)
+            .unwrap_or(Scope::Project),
+    )
 }
 
 fn resolve_plan_args(

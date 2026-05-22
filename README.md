@@ -310,9 +310,12 @@ rules = true
 skills = true
 ```
 
-With those defaults, `diff` and `sync` can omit `--from` and `--to`:
+With those defaults, `scan` and `status` can omit `--scope`, while `diff` and
+`sync` can omit `--from` and `--to`:
 
 ```bash
+agentsync scan
+agentsync status
 agentsync diff rules
 agentsync sync rules --write
 ```
