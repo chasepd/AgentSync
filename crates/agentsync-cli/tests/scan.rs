@@ -123,3 +123,37 @@ fn scan_json_includes_normalized_subagent_fields() {
     assert_eq!(subagent["subagent"]["description"], "Review code");
     assert_eq!(subagent["subagent"]["body"], "Review carefully.\n");
 }
+
+#[test]
+fn scan_json_includes_opencode_config_commands_as_blocked() {
+    let dir = tempdir().unwrap();
+    fs::write(
+        dir.path().join("opencode.json"),
+        r#"{"command":{"deploy":{"template":"Deploy the app"}}}"#,
+    )
+    .unwrap();
+
+    let output = Command::cargo_bin("agentsync")
+        .unwrap()
+        .current_dir(dir.path())
+        .args(["scan", "--format", "json"])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let json: Value = serde_json::from_slice(&output).unwrap();
+    let command = json["normalized"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|resource| resource["id"] == "commands:opencode:opencode.json")
+        .unwrap();
+
+    assert_eq!(command["kind"], "command");
+    assert_eq!(command["support"], "blocked");
+    assert!(command["native_extensions"]["native.raw"]
+        .as_str()
+        .unwrap()
+        .contains("\"command\""));
+}
