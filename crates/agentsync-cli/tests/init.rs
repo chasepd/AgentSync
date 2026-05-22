@@ -81,3 +81,23 @@ fn init_json_outputs_structured_report_and_does_not_write() {
     assert!(json["contents"].as_str().unwrap().contains("[defaults]"));
     assert!(!dir.path().join(".agentsync/config.toml").exists());
 }
+
+#[test]
+fn init_format_json_outputs_structured_report_and_does_not_write() {
+    let dir = tempdir().unwrap();
+
+    let output = Command::cargo_bin("agentsync")
+        .unwrap()
+        .current_dir(dir.path())
+        .args(["init", "--format", "json"])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let json: Value = serde_json::from_slice(&output).unwrap();
+
+    assert_eq!(json["path"], ".agentsync/config.toml");
+    assert_eq!(json["action"], "create");
+    assert!(!dir.path().join(".agentsync/config.toml").exists());
+}

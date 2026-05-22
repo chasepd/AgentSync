@@ -18,6 +18,9 @@ enum Command {
 
         #[arg(long)]
         json: bool,
+
+        #[arg(long)]
+        format: Option<CliFormat>,
     },
     /// Show missing formats and drift.
     Status {
@@ -29,6 +32,9 @@ enum Command {
 
         #[arg(long)]
         json: bool,
+
+        #[arg(long)]
+        format: Option<CliFormat>,
     },
     /// Preview generated target changes.
     Diff {
@@ -42,6 +48,9 @@ enum Command {
 
         #[arg(long)]
         json: bool,
+
+        #[arg(long)]
+        format: Option<CliFormat>,
     },
     /// Generate or update target formats. Writes require --write.
     Sync {
@@ -61,6 +70,9 @@ enum Command {
 
         #[arg(long)]
         json: bool,
+
+        #[arg(long)]
+        format: Option<CliFormat>,
     },
     /// Create an AgentSync config file. Writes require --write.
     Init {
@@ -69,6 +81,9 @@ enum Command {
 
         #[arg(long)]
         json: bool,
+
+        #[arg(long)]
+        format: Option<CliFormat>,
     },
     /// Validate local setup and compatibility.
     Doctor {
@@ -77,6 +92,9 @@ enum Command {
 
         #[arg(long)]
         json: bool,
+
+        #[arg(long)]
+        format: Option<CliFormat>,
     },
 }
 
@@ -110,6 +128,12 @@ enum CliAgent {
     #[value(name = "cursor", alias = "cursor-cli")]
     Cursor,
     Opencode,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq, ValueEnum)]
+enum CliFormat {
+    Table,
+    Json,
 }
 
 impl std::fmt::Display for CliScope {
@@ -168,19 +192,30 @@ fn main() -> Result<(), AgentSyncError> {
     let cli = Cli::parse();
 
     match cli.command {
-        Command::Scan { scope, json } => {
+        Command::Scan {
+            scope,
+            json,
+            format,
+        } => {
+            let output = resolve_output_format(json, format);
             let scope = resolve_scope(scope)?;
             let report = agentsync_core::scan(scope)?;
-            if json {
+            if output == CliFormat::Json {
                 println!("{}", serde_json::to_string_pretty(&report)?);
             } else {
                 println!("{}", report.to_table());
             }
         }
-        Command::Status { scope, check, json } => {
+        Command::Status {
+            scope,
+            check,
+            json,
+            format,
+        } => {
+            let output = resolve_output_format(json, format);
             let scope = resolve_scope(scope)?;
             let report = agentsync_core::status(scope)?;
-            if json {
+            if output == CliFormat::Json {
                 println!("{}", serde_json::to_string_pretty(&report)?);
             } else {
                 println!("{}", report.to_table());
@@ -194,11 +229,13 @@ fn main() -> Result<(), AgentSyncError> {
             from,
             to,
             json,
+            format,
         } => {
+            let output = resolve_output_format(json, format);
             let resource: ResourceSelector = resource.into();
             let (from, targets) = resolve_plan_args(resource, from, to)?;
             let report = agentsync_core::plan(std::env::current_dir()?, resource, from, &targets)?;
-            if json {
+            if output == CliFormat::Json {
                 println!("{}", serde_json::to_string_pretty(&report)?);
             } else {
                 print!("{}", report.to_text());
@@ -211,44 +248,56 @@ fn main() -> Result<(), AgentSyncError> {
             dry_run,
             write,
             json,
+            format,
         } => {
+            let output = resolve_output_format(json, format);
             let resource: ResourceSelector = resource.into();
             let (from, targets) = resolve_plan_args(resource, from, to)?;
             let report = agentsync_core::plan(std::env::current_dir()?, resource, from, &targets)?;
-            if json {
+            if output == CliFormat::Json {
                 println!("{}", serde_json::to_string_pretty(&report)?);
             } else {
                 print!("{}", report.to_text());
             }
             if write {
                 agentsync_core::write_plan(std::env::current_dir()?, &report)?;
-            } else if !dry_run && !json {
+            } else if !dry_run && output != CliFormat::Json {
                 println!("No files written. Re-run with --write to apply changes.");
             }
         }
-        Command::Init { write, json } => {
+        Command::Init {
+            write,
+            json,
+            format,
+        } => {
+            let output = resolve_output_format(json, format);
             let report = agentsync_core::init()?;
-            if json {
+            if output == CliFormat::Json {
                 println!("{}", serde_json::to_string_pretty(&report)?);
             } else {
                 print!("{}", report.to_text());
             }
             if write {
                 agentsync_core::write_init(std::env::current_dir()?, &report)?;
-                if !json {
+                if output != CliFormat::Json {
                     if report.action == agentsync_core::report::InitActionKind::Create {
                         println!("Wrote {}.", report.path.display());
                     } else {
                         println!("No files written.");
                     }
                 }
-            } else if !json {
+            } else if output != CliFormat::Json {
                 println!("No files written. Re-run with --write to create config.");
             }
         }
-        Command::Doctor { check, json } => {
+        Command::Doctor {
+            check,
+            json,
+            format,
+        } => {
+            let output = resolve_output_format(json, format);
             let report = agentsync_core::doctor()?;
-            if json {
+            if output == CliFormat::Json {
                 println!("{}", serde_json::to_string_pretty(&report)?);
             } else {
                 print!("{}", report.to_text());
@@ -260,6 +309,14 @@ fn main() -> Result<(), AgentSyncError> {
     }
 
     Ok(())
+}
+
+fn resolve_output_format(json: bool, format: Option<CliFormat>) -> CliFormat {
+    if json {
+        CliFormat::Json
+    } else {
+        format.unwrap_or(CliFormat::Table)
+    }
 }
 
 fn resolve_scope(scope: Option<CliScope>) -> Result<Scope, AgentSyncError> {
