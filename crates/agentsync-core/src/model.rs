@@ -143,6 +143,7 @@ pub struct AdapterCapabilities {
 pub enum ResourceSelector {
     Rules,
     Skills,
+    Subagents,
 }
 
 impl ResourceSelector {
@@ -150,6 +151,7 @@ impl ResourceSelector {
         match self {
             Self::Rules => "rules",
             Self::Skills => "skills",
+            Self::Subagents => "subagents",
         }
     }
 }

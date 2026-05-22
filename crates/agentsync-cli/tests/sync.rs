@@ -395,3 +395,63 @@ fn sync_format_json_outputs_json_and_does_not_write() {
     assert!(!dir.path().join("CLAUDE.md").exists());
     assert!(!dir.path().join(".agentsync/state.json").exists());
 }
+
+#[test]
+fn diff_subagent_returns_blocked_plan() {
+    let dir = tempdir().unwrap();
+    fs::create_dir_all(dir.path().join(".claude/agents")).unwrap();
+    fs::write(
+        dir.path().join(".claude/agents/reviewer.md"),
+        "---\nname: reviewer\n---\nReview carefully.\n",
+    )
+    .unwrap();
+
+    let output = Command::cargo_bin("agentsync")
+        .unwrap()
+        .current_dir(dir.path())
+        .args([
+            "diff", "subagent", "--from", "claude", "--to", "codex", "--format", "json",
+        ])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let json: Value = serde_json::from_slice(&output).unwrap();
+
+    assert_eq!(json["actions"][0]["action"], "block");
+    assert_eq!(json["actions"][0]["resource_id"], "subagents:reviewer");
+    assert!(json["diagnostics"][0]["message"]
+        .as_str()
+        .unwrap()
+        .contains("subagent rendering is blocked"));
+}
+
+#[test]
+fn sync_subagent_write_is_blocked_before_state_or_target_write() {
+    let dir = tempdir().unwrap();
+    fs::create_dir_all(dir.path().join(".claude/agents")).unwrap();
+    fs::write(
+        dir.path().join(".claude/agents/reviewer.md"),
+        "---\nname: reviewer\n---\nReview carefully.\n",
+    )
+    .unwrap();
+
+    Command::cargo_bin("agentsync")
+        .unwrap()
+        .current_dir(dir.path())
+        .args([
+            "sync",
+            "subagents",
+            "--from",
+            "claude",
+            "--to",
+            "codex",
+            "--write",
+        ])
+        .assert()
+        .failure();
+
+    assert!(!dir.path().join(".codex/agents/reviewer.md").exists());
+    assert!(!dir.path().join(".agentsync/state.json").exists());
+}
