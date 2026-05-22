@@ -90,6 +90,7 @@ pub struct NormalizedResource {
     pub native_paths: Vec<PathBuf>,
     pub rule_set: Option<RuleSet>,
     pub skill: Option<Skill>,
+    pub subagent: Option<Subagent>,
     pub native_extensions: BTreeMap<String, serde_json::Value>,
     pub diagnostics: Vec<crate::diagnostics::Diagnostic>,
     pub support: SupportLevel,
@@ -114,6 +115,14 @@ pub struct Skill {
 pub struct SkillAsset {
     pub relative_path: PathBuf,
     pub contents: String,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct Subagent {
+    pub name: String,
+    pub description: Option<String>,
+    pub body: String,
+    pub frontmatter: BTreeMap<String, serde_json::Value>,
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]

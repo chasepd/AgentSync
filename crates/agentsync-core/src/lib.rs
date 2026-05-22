@@ -849,6 +849,36 @@ mod tests {
     }
 
     #[test]
+    fn subagent_status_is_blocked_but_keeps_normalized_data() {
+        let dir = tempdir().unwrap();
+        fs::create_dir_all(dir.path().join(".claude/agents")).unwrap();
+        fs::write(
+            dir.path().join(".claude/agents/reviewer.md"),
+            "---\nname: reviewer\ndescription: Review code\n---\nReview carefully.\n",
+        )
+        .unwrap();
+
+        let scan = scan_root(dir.path(), Scope::Project).unwrap();
+        let resource = scan
+            .normalized
+            .iter()
+            .find(|resource| resource.id == "subagents:reviewer")
+            .unwrap();
+        let status = status_root(dir.path(), Scope::Project).unwrap();
+
+        assert_eq!(resource.support, SupportLevel::Blocked);
+        assert_eq!(
+            resource.subagent.as_ref().unwrap().description.as_deref(),
+            Some("Review code")
+        );
+        let blocked = status
+            .items
+            .iter()
+            .any(|item| item.id == "subagents:reviewer" && item.state == DriftState::Blocked);
+        assert!(blocked);
+    }
+
+    #[test]
     fn info_diagnostics_are_not_blocking_status() {
         let dir = tempdir().unwrap();
 
