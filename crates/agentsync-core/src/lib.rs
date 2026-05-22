@@ -196,6 +196,9 @@ targets = ["claude", "cursor", "opencode"]
 [sync]
 rules = true
 skills = true
+subagents = false
+commands = false
+hooks = false
 "#
     .to_string()
 }
