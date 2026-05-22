@@ -195,9 +195,9 @@ fn main() -> Result<(), AgentSyncError> {
             to,
             json,
         } => {
-            let (from, targets) = resolve_plan_args(from, to)?;
-            let report =
-                agentsync_core::plan(std::env::current_dir()?, resource.into(), from, &targets)?;
+            let resource: ResourceSelector = resource.into();
+            let (from, targets) = resolve_plan_args(resource, from, to)?;
+            let report = agentsync_core::plan(std::env::current_dir()?, resource, from, &targets)?;
             if json {
                 println!("{}", serde_json::to_string_pretty(&report)?);
             } else {
@@ -212,9 +212,9 @@ fn main() -> Result<(), AgentSyncError> {
             write,
             json,
         } => {
-            let (from, targets) = resolve_plan_args(from, to)?;
-            let report =
-                agentsync_core::plan(std::env::current_dir()?, resource.into(), from, &targets)?;
+            let resource: ResourceSelector = resource.into();
+            let (from, targets) = resolve_plan_args(resource, from, to)?;
+            let report = agentsync_core::plan(std::env::current_dir()?, resource, from, &targets)?;
             if json {
                 println!("{}", serde_json::to_string_pretty(&report)?);
             } else {
@@ -274,6 +274,7 @@ fn resolve_scope(scope: Option<CliScope>) -> Result<Scope, AgentSyncError> {
 }
 
 fn resolve_plan_args(
+    resource: ResourceSelector,
     from: Option<CliSource>,
     to: Vec<CliAgent>,
 ) -> Result<(SourceAlias, Vec<Agent>), AgentSyncError> {
@@ -283,6 +284,9 @@ fn resolve_plan_args(
     } else {
         None
     };
+    if let Some(config) = &config {
+        validate_resource_enabled(resource, config)?;
+    }
     let source = if let Some(source) = from {
         SourceAlias::from(source)
     } else {
@@ -309,4 +313,22 @@ fn resolve_plan_args(
         ));
     }
     Ok((source, targets))
+}
+
+fn validate_resource_enabled(
+    resource: ResourceSelector,
+    config: &agentsync_core::config::ConfigFile,
+) -> Result<(), AgentSyncError> {
+    let enabled = match resource {
+        ResourceSelector::Rules => config.sync.rules.unwrap_or(true),
+        ResourceSelector::Skills => config.sync.skills.unwrap_or(true),
+    };
+    if enabled {
+        Ok(())
+    } else {
+        Err(AgentSyncError::InvalidArgument(format!(
+            "{} sync is disabled in .agentsync/config.toml",
+            resource.as_str()
+        )))
+    }
 }

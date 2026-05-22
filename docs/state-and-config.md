@@ -42,6 +42,10 @@ agentsync diff rules
 agentsync sync rules --write
 ```
 
+When `diff` or `sync` use config defaults, `[sync]` toggles gate the selected
+resource kind. For example, `rules = false` blocks config-driven rules planning,
+and `skills = false` blocks config-driven skills planning before any write.
+
 Invalid config is reported by `agentsync doctor --check` and causes commands
 that need config defaults to fail before planning writes.
 
