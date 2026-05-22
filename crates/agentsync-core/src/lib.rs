@@ -446,6 +446,7 @@ fn select_sources(
         ResourceSelector::Skills => ResourceKind::Skill,
         ResourceSelector::Subagents => ResourceKind::Subagent,
         ResourceSelector::Commands => ResourceKind::Command,
+        ResourceSelector::Hooks => ResourceKind::Hook,
     };
     let mut selected = resources
         .iter()
@@ -1217,6 +1218,34 @@ mod tests {
         assert_eq!(
             report.actions[0].resource_id,
             "commands:opencode:.opencode/commands/deploy.md"
+        );
+        assert!(report.actions[0].rendered.is_none());
+        assert!(write_plan(dir.path(), &report).is_err());
+        assert!(!dir.path().join(".agentsync/state.json").exists());
+    }
+
+    #[test]
+    fn hook_plan_is_blocked_and_not_rendered() {
+        let dir = tempdir().unwrap();
+        fs::create_dir_all(dir.path().join(".claude")).unwrap();
+        fs::write(
+            dir.path().join(".claude/settings.json"),
+            r#"{"hooks":{"PreToolUse":[]}}"#,
+        )
+        .unwrap();
+
+        let report = plan(
+            dir.path(),
+            ResourceSelector::Hooks,
+            SourceAlias::Claude,
+            &[Agent::Codex],
+        )
+        .unwrap();
+
+        assert_eq!(report.actions[0].action, PlanActionKind::Block);
+        assert_eq!(
+            report.actions[0].resource_id,
+            "hooks:claude:.claude/settings.json"
         );
         assert!(report.actions[0].rendered.is_none());
         assert!(write_plan(dir.path(), &report).is_err());

@@ -131,6 +131,14 @@ impl AgentAdapter for ClaudeAdapter {
             ResourceKind::Subagent,
             ".claude/agents",
         );
+        discover_json_key_files(
+            &mut resources,
+            root,
+            self.agent(),
+            ResourceKind::Hook,
+            [".claude/settings.json", ".claude/settings.local.json"],
+            "hooks",
+        );
         Ok(resources)
     }
 
@@ -340,6 +348,31 @@ fn discover_md_dir(
                     resources.push(native(agent, kind, &rel.to_string_lossy()));
                 }
             }
+        }
+    }
+}
+
+fn discover_json_key_files<const N: usize>(
+    resources: &mut Vec<NativeResource>,
+    root: &Path,
+    agent: Agent,
+    kind: ResourceKind,
+    files: [&str; N],
+    key: &str,
+) {
+    for file in files {
+        let abs = root.join(file);
+        if !abs.is_file() {
+            continue;
+        }
+        let Ok(raw) = fs::read_to_string(&abs) else {
+            continue;
+        };
+        let Ok(value) = serde_json::from_str::<Value>(&raw) else {
+            continue;
+        };
+        if value.get(key).is_some() {
+            resources.push(native(agent, kind, file));
         }
     }
 }
@@ -814,11 +847,17 @@ mod tests {
         .unwrap();
         fs::create_dir_all(dir.path().join(".claude/agents")).unwrap();
         fs::write(dir.path().join(".claude/agents/helper.md"), "agent\n").unwrap();
+        fs::create_dir_all(dir.path().join(".claude")).unwrap();
+        fs::write(
+            dir.path().join(".claude/settings.json"),
+            r#"{"hooks":{"PreToolUse":[]}}"#,
+        )
+        .unwrap();
 
         let mut resources = ClaudeAdapter.discover(dir.path(), Scope::Project).unwrap();
         resources.sort_by(|a, b| a.path.cmp(&b.path));
 
-        assert_eq!(resources.len(), 3);
+        assert_eq!(resources.len(), 4);
         assert!(resources
             .iter()
             .any(|resource| resource.path == Path::new("CLAUDE.md")));
@@ -828,6 +867,27 @@ mod tests {
         assert!(resources
             .iter()
             .any(|resource| resource.path == Path::new(".claude/agents/helper.md")));
+        assert!(resources.iter().any(|resource| {
+            resource.kind == ResourceKind::Hook
+                && resource.path == Path::new(".claude/settings.json")
+        }));
+    }
+
+    #[test]
+    fn claude_adapter_does_not_treat_regular_settings_as_hooks() {
+        let dir = tempdir().unwrap();
+        fs::create_dir_all(dir.path().join(".claude")).unwrap();
+        fs::write(
+            dir.path().join(".claude/settings.json"),
+            r#"{"permissions":{"allow":[]}}"#,
+        )
+        .unwrap();
+
+        let resources = ClaudeAdapter.discover(dir.path(), Scope::Project).unwrap();
+
+        assert!(!resources
+            .iter()
+            .any(|resource| resource.kind == ResourceKind::Hook));
     }
 
     #[test]
