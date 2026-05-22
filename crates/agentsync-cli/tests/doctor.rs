@@ -71,6 +71,35 @@ fn doctor_check_fails_for_invalid_state() {
 }
 
 #[test]
+fn doctor_check_fails_for_unsupported_state_version() {
+    let dir = tempdir().unwrap();
+    fs::create_dir_all(dir.path().join(".agentsync")).unwrap();
+    fs::write(
+        dir.path().join(".agentsync/state.json"),
+        r#"{"version":2,"resources":[]}"#,
+    )
+    .unwrap();
+
+    let output = Command::cargo_bin("agentsync")
+        .unwrap()
+        .current_dir(dir.path())
+        .args(["doctor", "--json", "--check"])
+        .assert()
+        .failure()
+        .get_output()
+        .stdout
+        .clone();
+    let json: Value = serde_json::from_slice(&output).unwrap();
+
+    assert_eq!(json["state_present"], true);
+    assert_eq!(json["state_valid"], false);
+    assert!(json["diagnostics"][0]["message"]
+        .as_str()
+        .unwrap()
+        .contains("unsupported state version 2; expected 1"));
+}
+
+#[test]
 fn doctor_check_fails_for_invalid_config() {
     let dir = tempdir().unwrap();
     fs::create_dir_all(dir.path().join(".agentsync")).unwrap();

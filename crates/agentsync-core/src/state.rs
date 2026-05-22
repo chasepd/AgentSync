@@ -9,6 +9,8 @@ use crate::diagnostics::AgentSyncError;
 use crate::diagnostics::Diagnostic;
 use crate::model::{Agent, ResourceKind};
 
+const STATE_VERSION: u32 = 1;
+
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct StateFile {
     pub version: u32,
@@ -18,9 +20,19 @@ pub struct StateFile {
 impl StateFile {
     pub fn empty() -> Self {
         Self {
-            version: 1,
+            version: STATE_VERSION,
             resources: Vec::new(),
         }
+    }
+
+    pub fn validate(&self) -> Result<(), AgentSyncError> {
+        if self.version != STATE_VERSION {
+            return Err(AgentSyncError::InvalidArgument(format!(
+                "unsupported state version {}; expected {STATE_VERSION}",
+                self.version
+            )));
+        }
+        Ok(())
     }
 
     pub fn resource_mut(&mut self, resource_id: &str) -> Option<&mut StateResource> {
@@ -66,7 +78,9 @@ pub fn load_state(root: &Path) -> Result<StateFile, AgentSyncError> {
     if !path.exists() {
         return Ok(StateFile::empty());
     }
-    Ok(serde_json::from_str(&fs::read_to_string(path)?)?)
+    let state = serde_json::from_str::<StateFile>(&fs::read_to_string(path)?)?;
+    state.validate()?;
+    Ok(state)
 }
 
 pub fn save_state(root: &Path, state: &StateFile) -> Result<(), AgentSyncError> {
@@ -111,5 +125,21 @@ mod tests {
         assert_eq!(entry.source_agent, None);
         assert!(entry.diagnostics.is_empty());
         assert!(entry.native_extensions.is_empty());
+    }
+
+    #[test]
+    fn unsupported_state_version_fails() {
+        let dir = tempdir().unwrap();
+        fs::create_dir_all(dir.path().join(".agentsync")).unwrap();
+        fs::write(
+            dir.path().join(".agentsync/state.json"),
+            r#"{"version":2,"resources":[]}"#,
+        )
+        .unwrap();
+
+        assert!(load_state(dir.path())
+            .unwrap_err()
+            .to_string()
+            .contains("unsupported state version 2; expected 1"));
     }
 }

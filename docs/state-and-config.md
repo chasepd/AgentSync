@@ -69,3 +69,6 @@ that need config defaults to fail before planning writes.
 - preserved native extension metadata
 
 State is not the source of truth. Native files remain canonical.
+
+The current state schema version is `1`. AgentSync treats unsupported state
+versions as invalid instead of guessing how to interpret future schema shapes.
