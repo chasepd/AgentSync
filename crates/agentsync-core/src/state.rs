@@ -1,9 +1,12 @@
 use std::fs;
 use std::path::{Path, PathBuf};
 
+use std::collections::BTreeMap;
+
 use serde::{Deserialize, Serialize};
 
 use crate::diagnostics::AgentSyncError;
+use crate::diagnostics::Diagnostic;
 use crate::model::{Agent, ResourceKind};
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -31,9 +34,15 @@ impl StateFile {
 pub struct StateResource {
     pub resource_id: String,
     pub kind: ResourceKind,
+    #[serde(default)]
+    pub source_agent: Option<Agent>,
     pub source_paths: Vec<PathBuf>,
     pub source_checksum: String,
     pub targets: Vec<StateTarget>,
+    #[serde(default)]
+    pub diagnostics: Vec<Diagnostic>,
+    #[serde(default)]
+    pub native_extensions: BTreeMap<String, serde_json::Value>,
     pub last_synced_at: String,
 }
 
@@ -67,4 +76,40 @@ pub fn save_state(root: &Path, state: &StateFile) -> Result<(), AgentSyncError> 
     }
     fs::write(path, serde_json::to_string_pretty(state)?)?;
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tempfile::tempdir;
+
+    #[test]
+    fn load_state_accepts_legacy_resources_without_metadata() {
+        let dir = tempdir().unwrap();
+        fs::create_dir_all(dir.path().join(".agentsync")).unwrap();
+        fs::write(
+            dir.path().join(".agentsync/state.json"),
+            r#"{
+  "version": 1,
+  "resources": [
+    {
+      "resource_id": "rules:agents-md",
+      "kind": "rule_set",
+      "source_paths": ["AGENTS.md"],
+      "source_checksum": "abc",
+      "targets": [],
+      "last_synced_at": "2026-05-22T00:00:00Z"
+    }
+  ]
+}"#,
+        )
+        .unwrap();
+
+        let state = load_state(dir.path()).unwrap();
+        let entry = &state.resources[0];
+
+        assert_eq!(entry.source_agent, None);
+        assert!(entry.diagnostics.is_empty());
+        assert!(entry.native_extensions.is_empty());
+    }
 }
