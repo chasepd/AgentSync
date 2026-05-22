@@ -65,7 +65,13 @@ enum Command {
     /// Create an AgentSync config file.
     Init,
     /// Validate local setup and compatibility.
-    Doctor,
+    Doctor {
+        #[arg(long)]
+        check: bool,
+
+        #[arg(long)]
+        json: bool,
+    },
 }
 
 #[derive(Clone, Debug, ValueEnum)]
@@ -225,8 +231,16 @@ fn main() -> Result<(), AgentSyncError> {
         Command::Init => {
             println!("init is not implemented yet");
         }
-        Command::Doctor => {
-            println!("doctor is not implemented yet");
+        Command::Doctor { check, json } => {
+            let report = agentsync_core::doctor()?;
+            if json {
+                println!("{}", serde_json::to_string_pretty(&report)?);
+            } else {
+                print!("{}", report.to_text());
+            }
+            if check && report.has_blocking_issues() {
+                std::process::exit(1);
+            }
         }
     }
 
