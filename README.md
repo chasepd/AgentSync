@@ -289,41 +289,25 @@ AgentSync should be boringly safe by default:
 Create an optional config file:
 
 ```bash
-agentsync init
+agentsync init --write
 ```
+
+`agentsync init` without `--write` previews the config and does not write files.
+Existing `.agentsync/config.toml` files are left untouched.
 
 Example `.agentsync/config.toml`:
 
 ```toml
-default_source = "claude"
-default_targets = ["codex", "opencode"]
+schema_version = 1
 
-[scopes]
-project = true
-user = false
-
-[rules]
-source = "AGENTS.md"
+[defaults]
+scope = "project"
+source = "agents-md"
 targets = ["claude", "cursor", "opencode"]
 
-[subagents]
-sync = true
-on_conflict = "prompt"
-
-[hooks]
-sync = true
-allow_lossy = false
-
-[skills]
-sync = true
-prefer_open_standard = true
-
-[ignore]
-paths = [
-  ".claude/settings.local.json",
-  ".opencode/plugins/private-*",
-  "**/experimental/**"
-]
+[sync]
+rules = true
+skills = true
 ```
 
 ## Conversion notes
@@ -355,7 +339,7 @@ agentsync scan
 agentsync status
 agentsync diff
 agentsync sync
-agentsync init
+agentsync init [--write]
 agentsync doctor
 ```
 
