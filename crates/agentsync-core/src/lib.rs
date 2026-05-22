@@ -328,6 +328,15 @@ pub fn plan(
     let mut diagnostics = Vec::new();
     for source in sources {
         for target in targets {
+            if !matches!(source.kind, ResourceKind::RuleSet | ResourceKind::Skill) {
+                diagnostics.extend(source.diagnostics.clone());
+                actions.push(block_action(
+                    source,
+                    *target,
+                    "resource rendering is blocked for MVP sync",
+                ));
+                continue;
+            }
             if source.kind == ResourceKind::Skill && source.support != SupportLevel::Portable {
                 diagnostics.extend(source.diagnostics.clone());
                 actions.push(block_action(
@@ -435,6 +444,7 @@ fn select_sources(
     let kind = match selector {
         ResourceSelector::Rules => ResourceKind::RuleSet,
         ResourceSelector::Skills => ResourceKind::Skill,
+        ResourceSelector::Subagents => ResourceKind::Subagent,
     };
     let mut selected = resources
         .iter()
@@ -1159,6 +1169,31 @@ mod tests {
             }],
         };
 
+        assert!(write_plan(dir.path(), &report).is_err());
+        assert!(!dir.path().join(".agentsync/state.json").exists());
+    }
+
+    #[test]
+    fn subagent_plan_is_blocked_and_not_rendered() {
+        let dir = tempdir().unwrap();
+        fs::create_dir_all(dir.path().join(".claude/agents")).unwrap();
+        fs::write(
+            dir.path().join(".claude/agents/reviewer.md"),
+            "---\nname: reviewer\n---\nReview carefully.\n",
+        )
+        .unwrap();
+
+        let report = plan(
+            dir.path(),
+            ResourceSelector::Subagents,
+            SourceAlias::Claude,
+            &[Agent::Codex],
+        )
+        .unwrap();
+
+        assert_eq!(report.actions[0].action, PlanActionKind::Block);
+        assert_eq!(report.actions[0].resource_id, "subagents:reviewer");
+        assert!(report.actions[0].rendered.is_none());
         assert!(write_plan(dir.path(), &report).is_err());
         assert!(!dir.path().join(".agentsync/state.json").exists());
     }

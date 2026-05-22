@@ -21,5 +21,6 @@ Portable fields are eligible for cross-agent rendering. Native extension fields
 are keyed by source agent and preserved when a target cannot represent them.
 
 Subagents are normalized read-only in the current MVP. AgentSync preserves name,
-description, body, and frontmatter in scan/status reports, but rendering and
-write sync remain blocked until subagent conversion is explicitly supported.
+description, body, and frontmatter in scan/status reports. `diff subagent` and
+`sync subagents` return blocked plan actions; rendering and write sync remain
+blocked until subagent conversion is explicitly supported.

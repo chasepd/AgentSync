@@ -107,8 +107,12 @@ enum CliScope {
 
 #[derive(Clone, Debug, ValueEnum)]
 enum CliResource {
+    #[value(alias = "rule")]
     Rules,
+    #[value(alias = "skill")]
     Skills,
+    #[value(alias = "subagent")]
+    Subagents,
 }
 
 #[derive(Clone, Debug, ValueEnum)]
@@ -161,6 +165,7 @@ impl From<CliResource> for ResourceSelector {
         match value {
             CliResource::Rules => Self::Rules,
             CliResource::Skills => Self::Skills,
+            CliResource::Subagents => Self::Subagents,
         }
     }
 }
@@ -379,6 +384,7 @@ fn validate_resource_enabled(
     let enabled = match resource {
         ResourceSelector::Rules => config.sync.rules.unwrap_or(true),
         ResourceSelector::Skills => config.sync.skills.unwrap_or(true),
+        ResourceSelector::Subagents => true,
     };
     if enabled {
         Ok(())
