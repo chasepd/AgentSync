@@ -44,7 +44,7 @@ including the shared rules system in `.cursor/rules` and root-level
 
 | Resource | Claude Code | Codex CLI | Cursor CLI | OpenCode |
 | --- | --- | --- | --- | --- |
-| Rules / context | `CLAUDE.md`, `.claude/CLAUDE.md` | `AGENTS.md` | Cursor CLI rules, `AGENTS.md` where supported | `AGENTS.md`, `opencode.json` instructions |
+| Rules / context | `CLAUDE.md`, `.claude/CLAUDE.md` | `AGENTS.md` | Cursor CLI rules, `AGENTS.md` where supported | `AGENTS.md`, `opencode.json` / `opencode.jsonc` instructions |
 | Subagents / custom agents | `.claude/agents/*.md` | Codex subagents | Cursor CLI subagents | `.opencode/agents/*.md`, `opencode.json` agent config |
 | Skills | `.claude/skills/*/SKILL.md` | Agent Skills / `SKILL.md` folders | Agent Skills / `SKILL.md` folders | `.opencode/skills/*/SKILL.md`, `.agents/skills`, Claude-compatible skills |
 | Hooks / lifecycle automation | Claude Code hooks in settings | Codex-compatible automation, plugins, and external hooks where supported | Cursor CLI hooks | OpenCode plugins and events |
@@ -338,7 +338,7 @@ Examples:
 - A sandbox or permission policy in one tool may not have an equivalent in another.
 - Hook systems vary widely. Some are declarative config, while others are executable plugin code.
 - Cursor CLI rules and `AGENTS.md` instructions may overlap but are not always equivalent.
-- OpenCode `opencode.json` rules are read from literal `instructions` file paths.
+- OpenCode `opencode.json` / `opencode.jsonc` rules are read from literal `instructions` file paths.
   Glob patterns are reported as partial until AgentSync grows deterministic glob expansion.
 - Skills are most portable when they follow the open `SKILL.md` pattern, keep
   related assets inside the skill folder, and avoid agent-specific frontmatter.

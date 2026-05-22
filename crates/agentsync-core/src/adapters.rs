@@ -2,6 +2,7 @@ use std::collections::BTreeMap;
 use std::fs;
 use std::path::{Path, PathBuf};
 
+use jsonc_parser::{errors::ParseError, parse_to_serde_value, ParseOptions};
 use serde_json::Value;
 use walkdir::WalkDir;
 
@@ -240,6 +241,13 @@ impl AgentAdapter for OpenCodeAdapter {
             ResourceKind::RuleSet,
             "opencode.json",
         );
+        push_if_exists(
+            &mut resources,
+            root,
+            self.agent(),
+            ResourceKind::RuleSet,
+            "opencode.jsonc",
+        );
         discover_skill_dirs(&mut resources, root, self.agent(), [".opencode/skills"]);
         discover_md_dir(
             &mut resources,
@@ -260,7 +268,7 @@ impl AgentAdapter for OpenCodeAdapter {
             root,
             self.agent(),
             ResourceKind::Command,
-            ["opencode.json"],
+            OPENCODE_CONFIG_FILES,
             "command",
         );
         discover_ext_dir(
@@ -276,7 +284,7 @@ impl AgentAdapter for OpenCodeAdapter {
             root,
             self.agent(),
             ResourceKind::Plugin,
-            ["opencode.json"],
+            OPENCODE_CONFIG_FILES,
             "plugin",
         );
         Ok(resources)
@@ -297,6 +305,8 @@ impl AgentAdapter for OpenCodeAdapter {
         render_native(resource, Agent::OpenCode)
     }
 }
+
+const OPENCODE_CONFIG_FILES: [&str; 2] = ["opencode.json", "opencode.jsonc"];
 
 fn portable_capabilities(agent: Agent) -> AdapterCapabilities {
     let mut resources = BTreeMap::new();
@@ -421,7 +431,7 @@ fn discover_json_key_files<const N: usize>(
         let Ok(raw) = fs::read_to_string(&abs) else {
             continue;
         };
-        let Ok(value) = serde_json::from_str::<Value>(&raw) else {
+        let Ok(value) = parse_jsonc_value(&raw) else {
             continue;
         };
         if value.get(key).is_some() {
@@ -463,7 +473,7 @@ fn normalize_rule(
     root: &Path,
     native: &NativeResource,
 ) -> Result<NormalizedResource, AgentSyncError> {
-    if native.agent == Agent::OpenCode && native.path == Path::new("opencode.json") {
+    if native.agent == Agent::OpenCode && is_opencode_config(&native.path) {
         return normalize_opencode_config_rules(root, native);
     }
     let body = fs::read_to_string(root.join(&native.path))?;
@@ -490,10 +500,7 @@ fn normalize_opencode_config_rules(
     root: &Path,
     native: &NativeResource,
 ) -> Result<NormalizedResource, AgentSyncError> {
-    let raw = fs::read_to_string(root.join(&native.path))?;
-    let config = serde_json::from_str::<Value>(&raw).map_err(|error| {
-        AgentSyncError::Adapter(format!("failed to parse opencode.json as JSON: {error}"))
-    })?;
+    let config = parse_opencode_config(root, native)?;
     let mut diagnostics = Vec::new();
     let mut support = SupportLevel::Portable;
     let mut body_parts = Vec::new();
@@ -594,6 +601,35 @@ fn normalize_opencode_config_rules(
         diagnostics,
         support,
     })
+}
+
+fn parse_opencode_config(root: &Path, native: &NativeResource) -> Result<Value, AgentSyncError> {
+    let raw = fs::read_to_string(root.join(&native.path))?;
+    parse_jsonc_value(&raw).map_err(|error| {
+        AgentSyncError::Adapter(format!(
+            "failed to parse {} as JSONC: {error}",
+            native.path.display()
+        ))
+    })
+}
+
+fn parse_jsonc_value(raw: &str) -> Result<Value, ParseError> {
+    parse_to_serde_value::<Value>(
+        raw,
+        &ParseOptions {
+            allow_comments: true,
+            allow_loose_object_property_names: false,
+            allow_trailing_commas: true,
+            allow_missing_commas: false,
+            allow_single_quoted_strings: false,
+            allow_hexadecimal_numbers: false,
+            allow_unary_plus_numbers: false,
+        },
+    )
+}
+
+fn is_opencode_config(path: &Path) -> bool {
+    path == Path::new("opencode.json") || path == Path::new("opencode.jsonc")
 }
 
 fn opencode_instruction_diagnostic(native: &NativeResource, message: &str) -> Diagnostic {
@@ -1025,6 +1061,80 @@ mod tests {
             ]
         );
         assert!(resource.native_extensions.contains_key("opencode.config"));
+    }
+
+    #[test]
+    fn opencode_jsonc_config_reads_instructions_and_behavior_keys() {
+        let dir = tempdir().unwrap();
+        fs::write(
+            dir.path().join("opencode.jsonc"),
+            r#"{
+  // project config
+  "instructions": ["docs/rules.md"],
+  "command": {
+    "deploy": {
+      "template": "Deploy the app",
+    },
+  },
+  "plugin": ["opencode-wakatime"],
+}"#,
+        )
+        .unwrap();
+        fs::create_dir_all(dir.path().join("docs")).unwrap();
+        fs::write(dir.path().join("docs/rules.md"), "project rules\n").unwrap();
+
+        let resources = OpenCodeAdapter
+            .discover(dir.path(), Scope::Project)
+            .unwrap();
+
+        assert!(resources.iter().any(|resource| {
+            resource.kind == ResourceKind::RuleSet && resource.path == Path::new("opencode.jsonc")
+        }));
+        assert!(resources.iter().any(|resource| {
+            resource.kind == ResourceKind::Command && resource.path == Path::new("opencode.jsonc")
+        }));
+        assert!(resources.iter().any(|resource| {
+            resource.kind == ResourceKind::Plugin && resource.path == Path::new("opencode.jsonc")
+        }));
+
+        let native = NativeResource {
+            id: "rules:opencode:opencode.jsonc".to_string(),
+            agent: Agent::OpenCode,
+            kind: ResourceKind::RuleSet,
+            scope: Scope::Project,
+            path: PathBuf::from("opencode.jsonc"),
+        };
+        let resource = OpenCodeAdapter.read(dir.path(), &native).unwrap();
+
+        assert_eq!(
+            resource.rule_set.unwrap().body,
+            "<!-- docs/rules.md -->\nproject rules\n"
+        );
+    }
+
+    #[test]
+    fn opencode_jsonc_rejects_loose_non_jsonc_syntax() {
+        let dir = tempdir().unwrap();
+        fs::write(
+            dir.path().join("opencode.jsonc"),
+            r#"{
+  instructions: ["docs/rules.md"],
+}"#,
+        )
+        .unwrap();
+        let native = NativeResource {
+            id: "rules:opencode:opencode.jsonc".to_string(),
+            agent: Agent::OpenCode,
+            kind: ResourceKind::RuleSet,
+            scope: Scope::Project,
+            path: PathBuf::from("opencode.jsonc"),
+        };
+
+        assert!(OpenCodeAdapter
+            .read(dir.path(), &native)
+            .unwrap_err()
+            .to_string()
+            .contains("failed to parse opencode.jsonc as JSONC"));
     }
 
     #[test]
