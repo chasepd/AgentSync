@@ -8,7 +8,7 @@ use walkdir::WalkDir;
 use crate::diagnostics::{AgentSyncError, Diagnostic, DiagnosticSeverity};
 use crate::model::{
     AdapterCapabilities, Agent, NativeResource, NormalizedResource, RenderedFile, ResourceKind,
-    RuleSet, Scope, Skill, SkillAsset, SupportLevel,
+    RuleSet, Scope, Skill, SkillAsset, Subagent, SupportLevel,
 };
 
 pub trait AgentAdapter {
@@ -366,9 +366,8 @@ fn normalize_native(
     match native.kind {
         ResourceKind::RuleSet => normalize_rule(root, native),
         ResourceKind::Skill => normalize_skill(root, native),
-        ResourceKind::Subagent | ResourceKind::Hook | ResourceKind::Command => {
-            Ok(blocked_behavior(native))
-        }
+        ResourceKind::Subagent => normalize_subagent(root, native),
+        ResourceKind::Hook | ResourceKind::Command => Ok(blocked_behavior(native)),
     }
 }
 
@@ -392,6 +391,7 @@ fn normalize_rule(
         native_paths: vec![native.path.clone()],
         rule_set: Some(RuleSet { body }),
         skill: None,
+        subagent: None,
         native_extensions: BTreeMap::new(),
         diagnostics: Vec::new(),
         support: SupportLevel::Portable,
@@ -501,6 +501,7 @@ fn normalize_opencode_config_rules(
             body: body_parts.join("\n\n"),
         }),
         skill: None,
+        subagent: None,
         native_extensions,
         diagnostics,
         support,
@@ -600,9 +601,57 @@ fn normalize_skill(
             assets,
             frontmatter,
         }),
+        subagent: None,
         native_extensions: BTreeMap::new(),
         diagnostics,
         support,
+    })
+}
+
+fn normalize_subagent(
+    root: &Path,
+    native: &NativeResource,
+) -> Result<NormalizedResource, AgentSyncError> {
+    let path = root.join(&native.path);
+    let raw = fs::read_to_string(&path)?;
+    let (frontmatter, body) = split_frontmatter(&raw);
+    let name = frontmatter
+        .get("name")
+        .and_then(Value::as_str)
+        .map(ToOwned::to_owned)
+        .or_else(|| {
+            path.file_stem()
+                .and_then(|name| name.to_str())
+                .map(ToOwned::to_owned)
+        })
+        .unwrap_or_else(|| "subagent".to_string());
+    let description = frontmatter
+        .get("description")
+        .and_then(Value::as_str)
+        .map(ToOwned::to_owned);
+    Ok(NormalizedResource {
+        id: format!("subagents:{name}"),
+        kind: ResourceKind::Subagent,
+        scope: native.scope,
+        source_agent: native.agent,
+        native_paths: vec![native.path.clone()],
+        rule_set: None,
+        skill: None,
+        subagent: Some(Subagent {
+            name,
+            description,
+            body,
+            frontmatter,
+        }),
+        native_extensions: BTreeMap::new(),
+        diagnostics: vec![Diagnostic {
+            severity: DiagnosticSeverity::Warning,
+            resource_id: Some(native.id.clone()),
+            resource_kind: Some(ResourceKind::Subagent),
+            agent: Some(native.agent),
+            message: "subagent rendering is blocked for MVP sync".to_string(),
+        }],
+        support: SupportLevel::Blocked,
     })
 }
 
@@ -615,6 +664,7 @@ fn blocked_behavior(native: &NativeResource) -> NormalizedResource {
         native_paths: vec![native.path.clone()],
         rule_set: None,
         skill: None,
+        subagent: None,
         native_extensions: BTreeMap::new(),
         diagnostics: vec![Diagnostic {
             severity: DiagnosticSeverity::Warning,
@@ -792,6 +842,7 @@ mod tests {
                 body: "rules\n".to_string(),
             }),
             skill: None,
+            subagent: None,
             native_extensions: BTreeMap::new(),
             diagnostics: Vec::new(),
             support: SupportLevel::Portable,
@@ -864,5 +915,63 @@ mod tests {
             .diagnostics
             .iter()
             .any(|diagnostic| diagnostic.message.contains("uses a glob")));
+    }
+
+    #[test]
+    fn claude_subagent_is_normalized_read_only() {
+        let dir = tempdir().unwrap();
+        fs::create_dir_all(dir.path().join(".claude/agents")).unwrap();
+        fs::write(
+            dir.path().join(".claude/agents/reviewer.md"),
+            "---\nname: reviewer\ndescription: Review code\nmodel: sonnet\n---\nReview carefully.\n",
+        )
+        .unwrap();
+        let native = NativeResource {
+            id: "subagents:claude:.claude/agents/reviewer.md".to_string(),
+            agent: Agent::Claude,
+            kind: ResourceKind::Subagent,
+            scope: Scope::Project,
+            path: PathBuf::from(".claude/agents/reviewer.md"),
+        };
+
+        let resource = ClaudeAdapter.read(dir.path(), &native).unwrap();
+        let subagent = resource.subagent.unwrap();
+
+        assert_eq!(resource.id, "subagents:reviewer");
+        assert_eq!(resource.support, SupportLevel::Blocked);
+        assert_eq!(subagent.name, "reviewer");
+        assert_eq!(subagent.description.as_deref(), Some("Review code"));
+        assert_eq!(subagent.body, "Review carefully.\n");
+        assert_eq!(
+            subagent.frontmatter.get("model").and_then(Value::as_str),
+            Some("sonnet")
+        );
+        assert!(resource
+            .diagnostics
+            .iter()
+            .any(|diagnostic| diagnostic.message.contains("subagent rendering is blocked")));
+    }
+
+    #[test]
+    fn opencode_subagent_name_falls_back_to_file_stem() {
+        let dir = tempdir().unwrap();
+        fs::create_dir_all(dir.path().join(".opencode/agents")).unwrap();
+        fs::write(
+            dir.path().join(".opencode/agents/planner.md"),
+            "Plan the work.\n",
+        )
+        .unwrap();
+        let native = NativeResource {
+            id: "subagents:opencode:.opencode/agents/planner.md".to_string(),
+            agent: Agent::OpenCode,
+            kind: ResourceKind::Subagent,
+            scope: Scope::Project,
+            path: PathBuf::from(".opencode/agents/planner.md"),
+        };
+
+        let resource = OpenCodeAdapter.read(dir.path(), &native).unwrap();
+
+        assert_eq!(resource.id, "subagents:planner");
+        assert_eq!(resource.subagent.unwrap().name, "planner");
     }
 }

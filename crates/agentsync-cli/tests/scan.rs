@@ -89,3 +89,37 @@ fn scan_format_json_outputs_structured_report() {
         .iter()
         .any(|resource| resource["path"] == "AGENTS.md"));
 }
+
+#[test]
+fn scan_json_includes_normalized_subagent_fields() {
+    let dir = tempdir().unwrap();
+    fs::create_dir_all(dir.path().join(".claude/agents")).unwrap();
+    fs::write(
+        dir.path().join(".claude/agents/reviewer.md"),
+        "---\nname: reviewer\ndescription: Review code\n---\nReview carefully.\n",
+    )
+    .unwrap();
+
+    let output = Command::cargo_bin("agentsync")
+        .unwrap()
+        .current_dir(dir.path())
+        .args(["scan", "--format", "json"])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let json: Value = serde_json::from_slice(&output).unwrap();
+    let subagent = json["normalized"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|resource| resource["id"] == "subagents:reviewer")
+        .unwrap();
+
+    assert_eq!(subagent["kind"], "subagent");
+    assert_eq!(subagent["support"], "blocked");
+    assert_eq!(subagent["subagent"]["name"], "reviewer");
+    assert_eq!(subagent["subagent"]["description"], "Review code");
+    assert_eq!(subagent["subagent"]["body"], "Review carefully.\n");
+}
