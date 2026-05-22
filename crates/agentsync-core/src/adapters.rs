@@ -255,6 +255,14 @@ impl AgentAdapter for OpenCodeAdapter {
             ResourceKind::Command,
             ".opencode/commands",
         );
+        discover_json_key_files(
+            &mut resources,
+            root,
+            self.agent(),
+            ResourceKind::Command,
+            ["opencode.json"],
+            "command",
+        );
         Ok(resources)
     }
 
@@ -400,7 +408,7 @@ fn normalize_native(
         ResourceKind::RuleSet => normalize_rule(root, native),
         ResourceKind::Skill => normalize_skill(root, native),
         ResourceKind::Subagent => normalize_subagent(root, native),
-        ResourceKind::Hook | ResourceKind::Command => Ok(blocked_behavior(native)),
+        ResourceKind::Hook | ResourceKind::Command => Ok(blocked_behavior(root, native)),
     }
 }
 
@@ -688,7 +696,30 @@ fn normalize_subagent(
     })
 }
 
-fn blocked_behavior(native: &NativeResource) -> NormalizedResource {
+fn blocked_behavior(root: &Path, native: &NativeResource) -> NormalizedResource {
+    let mut native_extensions = BTreeMap::new();
+    let mut diagnostics = vec![Diagnostic {
+        severity: DiagnosticSeverity::Warning,
+        resource_id: Some(native.id.clone()),
+        resource_kind: Some(native.kind),
+        agent: Some(native.agent),
+        message: "behavioral resources are blocked for MVP sync".to_string(),
+    }];
+    match fs::read_to_string(root.join(&native.path)) {
+        Ok(raw) => {
+            native_extensions.insert("native.raw".to_string(), Value::String(raw));
+        }
+        Err(error) => diagnostics.push(Diagnostic {
+            severity: DiagnosticSeverity::Warning,
+            resource_id: Some(native.id.clone()),
+            resource_kind: Some(native.kind),
+            agent: Some(native.agent),
+            message: format!(
+                "could not preserve raw behavioral resource {}: {error}",
+                native.path.display()
+            ),
+        }),
+    }
     NormalizedResource {
         id: native.id.clone(),
         kind: native.kind,
@@ -698,14 +729,8 @@ fn blocked_behavior(native: &NativeResource) -> NormalizedResource {
         rule_set: None,
         skill: None,
         subagent: None,
-        native_extensions: BTreeMap::new(),
-        diagnostics: vec![Diagnostic {
-            severity: DiagnosticSeverity::Warning,
-            resource_id: Some(native.id.clone()),
-            resource_kind: Some(native.kind),
-            agent: Some(native.agent),
-            message: "behavioral resources are blocked for MVP sync".to_string(),
-        }],
+        native_extensions,
+        diagnostics,
         support: SupportLevel::Blocked,
     }
 }
@@ -975,6 +1000,40 @@ mod tests {
             .diagnostics
             .iter()
             .any(|diagnostic| diagnostic.message.contains("uses a glob")));
+    }
+
+    #[test]
+    fn opencode_config_command_is_discovered_as_blocked_behavior() {
+        let dir = tempdir().unwrap();
+        fs::write(
+            dir.path().join("opencode.json"),
+            r#"{"command":{"deploy":{"template":"Deploy the app"}}}"#,
+        )
+        .unwrap();
+
+        let resources = OpenCodeAdapter
+            .discover(dir.path(), Scope::Project)
+            .unwrap();
+        let command = resources
+            .iter()
+            .find(|resource| {
+                resource.kind == ResourceKind::Command
+                    && resource.path == Path::new("opencode.json")
+            })
+            .unwrap();
+        let resource = OpenCodeAdapter.read(dir.path(), command).unwrap();
+
+        assert_eq!(resource.id, "commands:opencode:opencode.json");
+        assert_eq!(resource.support, SupportLevel::Blocked);
+        assert!(resource
+            .native_extensions
+            .get("native.raw")
+            .and_then(Value::as_str)
+            .unwrap()
+            .contains("\"command\""));
+        assert!(resource.diagnostics.iter().any(|diagnostic| diagnostic
+            .message
+            .contains("behavioral resources are blocked")));
     }
 
     #[test]
