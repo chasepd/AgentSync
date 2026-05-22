@@ -263,6 +263,22 @@ impl AgentAdapter for OpenCodeAdapter {
             ["opencode.json"],
             "command",
         );
+        discover_ext_dir(
+            &mut resources,
+            root,
+            self.agent(),
+            ResourceKind::Plugin,
+            ".opencode/plugins",
+            &["cjs", "cts", "js", "mjs", "mts", "ts"],
+        );
+        discover_json_key_files(
+            &mut resources,
+            root,
+            self.agent(),
+            ResourceKind::Plugin,
+            ["opencode.json"],
+            "plugin",
+        );
         Ok(resources)
     }
 
@@ -289,6 +305,7 @@ fn portable_capabilities(agent: Agent) -> AdapterCapabilities {
     resources.insert(ResourceKind::Subagent, SupportLevel::Blocked);
     resources.insert(ResourceKind::Hook, SupportLevel::Blocked);
     resources.insert(ResourceKind::Command, SupportLevel::Blocked);
+    resources.insert(ResourceKind::Plugin, SupportLevel::Blocked);
 
     let mut fields = BTreeMap::new();
     fields.insert("rules.body".to_string(), SupportLevel::Portable);
@@ -360,6 +377,34 @@ fn discover_md_dir(
     }
 }
 
+fn discover_ext_dir(
+    resources: &mut Vec<NativeResource>,
+    root: &Path,
+    agent: Agent,
+    kind: ResourceKind,
+    dir: &str,
+    extensions: &[&str],
+) {
+    let abs = root.join(dir);
+    if !abs.exists() {
+        return;
+    }
+    for entry in WalkDir::new(abs).into_iter().flatten() {
+        if entry.file_type().is_file() {
+            let path = entry.path();
+            if path
+                .extension()
+                .and_then(|ext| ext.to_str())
+                .is_some_and(|ext| extensions.contains(&ext))
+            {
+                if let Ok(rel) = path.strip_prefix(root) {
+                    resources.push(native(agent, kind, &rel.to_string_lossy()));
+                }
+            }
+        }
+    }
+}
+
 fn discover_json_key_files<const N: usize>(
     resources: &mut Vec<NativeResource>,
     root: &Path,
@@ -408,7 +453,9 @@ fn normalize_native(
         ResourceKind::RuleSet => normalize_rule(root, native),
         ResourceKind::Skill => normalize_skill(root, native),
         ResourceKind::Subagent => normalize_subagent(root, native),
-        ResourceKind::Hook | ResourceKind::Command => Ok(blocked_behavior(root, native)),
+        ResourceKind::Hook | ResourceKind::Command | ResourceKind::Plugin => {
+            Ok(blocked_behavior(root, native))
+        }
     }
 }
 
@@ -858,6 +905,10 @@ mod tests {
             capabilities.resources.get(&ResourceKind::Command),
             Some(&SupportLevel::Blocked)
         );
+        assert_eq!(
+            capabilities.resources.get(&ResourceKind::Plugin),
+            Some(&SupportLevel::Blocked)
+        );
     }
 
     #[test]
@@ -1034,6 +1085,48 @@ mod tests {
         assert!(resource.diagnostics.iter().any(|diagnostic| diagnostic
             .message
             .contains("behavioral resources are blocked")));
+    }
+
+    #[test]
+    fn opencode_plugins_are_discovered_as_blocked_behavior() {
+        let dir = tempdir().unwrap();
+        fs::create_dir_all(dir.path().join(".opencode/plugins")).unwrap();
+        fs::write(
+            dir.path().join(".opencode/plugins/notify.ts"),
+            "export const Notify = async () => ({})\n",
+        )
+        .unwrap();
+        fs::write(
+            dir.path().join("opencode.json"),
+            r#"{"plugin":["opencode-wakatime"]}"#,
+        )
+        .unwrap();
+
+        let mut resources = OpenCodeAdapter
+            .discover(dir.path(), Scope::Project)
+            .unwrap();
+        resources.sort_by(|a, b| a.id.cmp(&b.id));
+
+        assert!(resources.iter().any(|resource| {
+            resource.kind == ResourceKind::Plugin
+                && resource.path == Path::new(".opencode/plugins/notify.ts")
+        }));
+        let config_plugin = resources
+            .iter()
+            .find(|resource| {
+                resource.kind == ResourceKind::Plugin && resource.path == Path::new("opencode.json")
+            })
+            .unwrap();
+        let resource = OpenCodeAdapter.read(dir.path(), config_plugin).unwrap();
+
+        assert_eq!(resource.id, "plugins:opencode:opencode.json");
+        assert_eq!(resource.support, SupportLevel::Blocked);
+        assert!(resource
+            .native_extensions
+            .get("native.raw")
+            .and_then(Value::as_str)
+            .unwrap()
+            .contains("\"plugin\""));
     }
 
     #[test]

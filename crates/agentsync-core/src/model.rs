@@ -50,6 +50,7 @@ pub enum ResourceKind {
     Subagent,
     Hook,
     Command,
+    Plugin,
 }
 
 impl ResourceKind {
@@ -60,6 +61,7 @@ impl ResourceKind {
             Self::Subagent => "subagents",
             Self::Hook => "hooks",
             Self::Command => "commands",
+            Self::Plugin => "plugins",
         }
     }
 }
