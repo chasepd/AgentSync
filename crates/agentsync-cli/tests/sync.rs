@@ -455,3 +455,51 @@ fn sync_subagent_write_is_blocked_before_state_or_target_write() {
     assert!(!dir.path().join(".codex/agents/reviewer.md").exists());
     assert!(!dir.path().join(".agentsync/state.json").exists());
 }
+
+#[test]
+fn diff_command_returns_blocked_plan() {
+    let dir = tempdir().unwrap();
+    fs::create_dir_all(dir.path().join(".opencode/commands")).unwrap();
+    fs::write(dir.path().join(".opencode/commands/deploy.md"), "deploy\n").unwrap();
+
+    let output = Command::cargo_bin("agentsync")
+        .unwrap()
+        .current_dir(dir.path())
+        .args([
+            "diff", "command", "--from", "opencode", "--to", "codex", "--format", "json",
+        ])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let json: Value = serde_json::from_slice(&output).unwrap();
+
+    assert_eq!(json["actions"][0]["action"], "block");
+    assert_eq!(
+        json["actions"][0]["resource_id"],
+        "commands:opencode:.opencode/commands/deploy.md"
+    );
+    assert!(json["diagnostics"][0]["message"]
+        .as_str()
+        .unwrap()
+        .contains("behavioral resources are blocked"));
+}
+
+#[test]
+fn sync_command_write_is_blocked_before_state_write() {
+    let dir = tempdir().unwrap();
+    fs::create_dir_all(dir.path().join(".opencode/commands")).unwrap();
+    fs::write(dir.path().join(".opencode/commands/deploy.md"), "deploy\n").unwrap();
+
+    Command::cargo_bin("agentsync")
+        .unwrap()
+        .current_dir(dir.path())
+        .args([
+            "sync", "commands", "--from", "opencode", "--to", "codex", "--write",
+        ])
+        .assert()
+        .failure();
+
+    assert!(!dir.path().join(".agentsync/state.json").exists());
+}

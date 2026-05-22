@@ -144,6 +144,7 @@ pub enum ResourceSelector {
     Rules,
     Skills,
     Subagents,
+    Commands,
 }
 
 impl ResourceSelector {
@@ -152,6 +153,7 @@ impl ResourceSelector {
             Self::Rules => "rules",
             Self::Skills => "skills",
             Self::Subagents => "subagents",
+            Self::Commands => "commands",
         }
     }
 }

@@ -113,6 +113,8 @@ enum CliResource {
     Skills,
     #[value(alias = "subagent")]
     Subagents,
+    #[value(alias = "command")]
+    Commands,
 }
 
 #[derive(Clone, Debug, ValueEnum)]
@@ -166,6 +168,7 @@ impl From<CliResource> for ResourceSelector {
             CliResource::Rules => Self::Rules,
             CliResource::Skills => Self::Skills,
             CliResource::Subagents => Self::Subagents,
+            CliResource::Commands => Self::Commands,
         }
     }
 }
@@ -385,6 +388,7 @@ fn validate_resource_enabled(
         ResourceSelector::Rules => config.sync.rules.unwrap_or(true),
         ResourceSelector::Skills => config.sync.skills.unwrap_or(true),
         ResourceSelector::Subagents => true,
+        ResourceSelector::Commands => true,
     };
     if enabled {
         Ok(())
