@@ -1,6 +1,7 @@
 use crate::diagnostics::Diagnostic;
 use crate::model::{AdapterCapabilities, NativeResource, NormalizedResource, RenderedFile, Scope};
 use serde::{Deserialize, Serialize};
+use std::path::PathBuf;
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct ScanReport {
@@ -182,4 +183,56 @@ pub enum PlanActionKind {
     Update,
     Skip,
     Block,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct DoctorReport {
+    pub root: PathBuf,
+    pub state_path: PathBuf,
+    pub state_present: bool,
+    pub state_valid: bool,
+    pub resource_count: usize,
+    pub normalized_count: usize,
+    pub tracked_resource_count: usize,
+    pub blocking_status_count: usize,
+    pub diagnostics: Vec<Diagnostic>,
+}
+
+impl DoctorReport {
+    pub fn has_blocking_issues(&self) -> bool {
+        !self.state_valid
+            || self.blocking_status_count > 0
+            || self.diagnostics.iter().any(Diagnostic::is_blocking)
+    }
+
+    pub fn to_text(&self) -> String {
+        let mut out = format!("AgentSync doctor ({})\n", self.root.display());
+        out.push_str(&format!("state: {}\n", self.state_path.display()));
+        out.push_str(&format!(
+            "state_status: {}\n",
+            if self.state_present {
+                if self.state_valid {
+                    "valid"
+                } else {
+                    "invalid"
+                }
+            } else {
+                "missing"
+            }
+        ));
+        out.push_str(&format!("resources: {}\n", self.resource_count));
+        out.push_str(&format!("normalized: {}\n", self.normalized_count));
+        out.push_str(&format!("tracked: {}\n", self.tracked_resource_count));
+        out.push_str(&format!(
+            "blocking_status: {}\n",
+            self.blocking_status_count
+        ));
+        for diagnostic in &self.diagnostics {
+            out.push_str(&format!(
+                "{:?}: {}\n",
+                diagnostic.severity, diagnostic.message
+            ));
+        }
+        out
+    }
 }

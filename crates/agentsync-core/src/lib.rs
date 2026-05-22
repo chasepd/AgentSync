@@ -12,7 +12,8 @@ use adapters::built_in_adapters;
 use chrono::Utc;
 use model::{NativeResource, NormalizedResource, SupportLevel};
 use report::{
-    DriftState, PlanAction, PlanActionKind, PlanReport, ScanReport, StatusItem, StatusReport,
+    DoctorReport, DriftState, PlanAction, PlanActionKind, PlanReport, ScanReport, StatusItem,
+    StatusReport,
 };
 use sha2::{Digest, Sha256};
 use state::{load_state, save_state, StateFile, StateResource, StateTarget};
@@ -65,6 +66,58 @@ pub fn scan_root(root: impl AsRef<Path>, scope: Scope) -> Result<ScanReport, Age
 
 pub fn status(scope: Scope) -> Result<StatusReport, AgentSyncError> {
     status_root(std::env::current_dir()?, scope)
+}
+
+pub fn doctor() -> Result<DoctorReport, AgentSyncError> {
+    doctor_root(std::env::current_dir()?)
+}
+
+pub fn doctor_root(root: impl AsRef<Path>) -> Result<DoctorReport, AgentSyncError> {
+    let root = root.as_ref();
+    let scan = scan_root(root, Scope::Project)?;
+    let state_path = root.join(".agentsync/state.json");
+    let state_present = state_path.exists();
+    let mut state_valid = true;
+    let mut tracked_resource_count = 0;
+    let mut diagnostics = scan.diagnostics.clone();
+
+    if state_present {
+        match load_state(root) {
+            Ok(state) => tracked_resource_count = state.resources.len(),
+            Err(error) => {
+                state_valid = false;
+                diagnostics.push(Diagnostic {
+                    severity: DiagnosticSeverity::Error,
+                    resource_id: None,
+                    resource_kind: None,
+                    agent: None,
+                    message: format!("failed to load .agentsync/state.json: {error}"),
+                });
+            }
+        }
+    }
+
+    let blocking_status_count = if state_valid {
+        status_root(root, Scope::Project)?
+            .items
+            .iter()
+            .filter(|item| item.is_blocking())
+            .count()
+    } else {
+        0
+    };
+
+    Ok(DoctorReport {
+        root: root.to_path_buf(),
+        state_path,
+        state_present,
+        state_valid,
+        resource_count: scan.resources.len(),
+        normalized_count: scan.normalized.len(),
+        tracked_resource_count,
+        blocking_status_count,
+        diagnostics,
+    })
 }
 
 pub fn status_root(root: impl AsRef<Path>, scope: Scope) -> Result<StatusReport, AgentSyncError> {
