@@ -34,6 +34,11 @@ fn status_check_fails_for_blocked_behavioral_resources() {
         "export const Notify = async () => ({})\n",
     )
     .unwrap();
+    fs::write(
+        dir.path().join("opencode.jsonc"),
+        r#"{"permission":{"edit":"ask"}}"#,
+    )
+    .unwrap();
 
     Command::cargo_bin("agentsync")
         .unwrap()

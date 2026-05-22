@@ -286,3 +286,48 @@ fn scan_json_includes_opencode_config_agents_as_blocked() {
         .unwrap()
         .contains("\"agent\""));
 }
+
+#[test]
+fn scan_json_includes_permission_config_as_blocked() {
+    let dir = tempdir().unwrap();
+    fs::create_dir_all(dir.path().join(".claude")).unwrap();
+    fs::write(
+        dir.path().join(".claude/settings.json"),
+        r#"{"permissions":{"allow":["Bash(git status)"]}}"#,
+    )
+    .unwrap();
+    fs::write(
+        dir.path().join("opencode.jsonc"),
+        r#"{
+  "permission": {
+    "edit": "ask",
+  },
+}"#,
+    )
+    .unwrap();
+
+    let output = Command::cargo_bin("agentsync")
+        .unwrap()
+        .current_dir(dir.path())
+        .args(["scan", "--format", "json"])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let json: Value = serde_json::from_slice(&output).unwrap();
+    let normalized = json["normalized"].as_array().unwrap();
+
+    assert!(normalized.iter().any(|resource| {
+        resource["id"] == "permissions:claude:.claude/settings.json"
+            && resource["kind"] == "permission"
+            && resource["support"] == "blocked"
+    }));
+    assert!(normalized.iter().any(|resource| {
+        resource["id"] == "permissions:opencode:opencode.jsonc"
+            && resource["native_extensions"]["native.raw"]
+                .as_str()
+                .unwrap()
+                .contains("\"permission\"")
+    }));
+}
