@@ -115,6 +115,8 @@ enum CliResource {
     Subagents,
     #[value(alias = "command")]
     Commands,
+    #[value(alias = "hook")]
+    Hooks,
 }
 
 #[derive(Clone, Debug, ValueEnum)]
@@ -169,6 +171,7 @@ impl From<CliResource> for ResourceSelector {
             CliResource::Skills => Self::Skills,
             CliResource::Subagents => Self::Subagents,
             CliResource::Commands => Self::Commands,
+            CliResource::Hooks => Self::Hooks,
         }
     }
 }
@@ -389,6 +392,7 @@ fn validate_resource_enabled(
         ResourceSelector::Skills => config.sync.skills.unwrap_or(true),
         ResourceSelector::Subagents => true,
         ResourceSelector::Commands => true,
+        ResourceSelector::Hooks => true,
     };
     if enabled {
         Ok(())

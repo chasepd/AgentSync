@@ -503,3 +503,59 @@ fn sync_command_write_is_blocked_before_state_write() {
 
     assert!(!dir.path().join(".agentsync/state.json").exists());
 }
+
+#[test]
+fn diff_hook_returns_blocked_plan() {
+    let dir = tempdir().unwrap();
+    fs::create_dir_all(dir.path().join(".claude")).unwrap();
+    fs::write(
+        dir.path().join(".claude/settings.json"),
+        r#"{"hooks":{"PreToolUse":[]}}"#,
+    )
+    .unwrap();
+
+    let output = Command::cargo_bin("agentsync")
+        .unwrap()
+        .current_dir(dir.path())
+        .args([
+            "diff", "hook", "--from", "claude", "--to", "codex", "--format", "json",
+        ])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let json: Value = serde_json::from_slice(&output).unwrap();
+
+    assert_eq!(json["actions"][0]["action"], "block");
+    assert_eq!(
+        json["actions"][0]["resource_id"],
+        "hooks:claude:.claude/settings.json"
+    );
+    assert!(json["diagnostics"][0]["message"]
+        .as_str()
+        .unwrap()
+        .contains("behavioral resources are blocked"));
+}
+
+#[test]
+fn sync_hook_write_is_blocked_before_state_write() {
+    let dir = tempdir().unwrap();
+    fs::create_dir_all(dir.path().join(".claude")).unwrap();
+    fs::write(
+        dir.path().join(".claude/settings.json"),
+        r#"{"hooks":{"PreToolUse":[]}}"#,
+    )
+    .unwrap();
+
+    Command::cargo_bin("agentsync")
+        .unwrap()
+        .current_dir(dir.path())
+        .args([
+            "sync", "hooks", "--from", "claude", "--to", "codex", "--write",
+        ])
+        .assert()
+        .failure();
+
+    assert!(!dir.path().join(".agentsync/state.json").exists());
+}
