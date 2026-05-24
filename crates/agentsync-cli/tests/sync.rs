@@ -102,6 +102,38 @@ fn sync_skills_write_creates_text_assets() {
 }
 
 #[test]
+fn sync_named_skill_only_writes_matching_resource() {
+    let dir = tempdir().unwrap();
+    fs::create_dir_all(dir.path().join(".claude/skills/review")).unwrap();
+    fs::create_dir_all(dir.path().join(".claude/skills/lint")).unwrap();
+    fs::write(
+        dir.path().join(".claude/skills/review/SKILL.md"),
+        "---\nname: review\n---\nReview body\n",
+    )
+    .unwrap();
+    fs::write(
+        dir.path().join(".claude/skills/lint/SKILL.md"),
+        "---\nname: lint\n---\nLint body\n",
+    )
+    .unwrap();
+
+    Command::cargo_bin("agentsync")
+        .unwrap()
+        .current_dir(dir.path())
+        .args([
+            "sync", "skill", "review", "--from", "claude", "--to", "codex", "--write",
+        ])
+        .assert()
+        .success();
+
+    assert_eq!(
+        fs::read_to_string(dir.path().join(".codex/skills/review/SKILL.md")).unwrap(),
+        "---\nname: review\n---\nReview body\n"
+    );
+    assert!(!dir.path().join(".codex/skills/lint/SKILL.md").exists());
+}
+
+#[test]
 fn diff_fails_for_unsupported_state_version() {
     let dir = tempdir().unwrap();
     fs::create_dir_all(dir.path().join(".agentsync")).unwrap();
@@ -578,6 +610,39 @@ fn diff_subagent_returns_blocked_plan() {
         .as_str()
         .unwrap()
         .contains("subagent rendering is blocked"));
+}
+
+#[test]
+fn diff_named_subagent_only_reports_matching_resource() {
+    let dir = tempdir().unwrap();
+    fs::create_dir_all(dir.path().join(".claude/agents")).unwrap();
+    fs::write(
+        dir.path().join(".claude/agents/reviewer.md"),
+        "---\nname: reviewer\n---\nReview carefully.\n",
+    )
+    .unwrap();
+    fs::write(
+        dir.path().join(".claude/agents/planner.md"),
+        "---\nname: planner\n---\nPlan carefully.\n",
+    )
+    .unwrap();
+
+    let output = Command::cargo_bin("agentsync")
+        .unwrap()
+        .current_dir(dir.path())
+        .args([
+            "diff", "subagent", "reviewer", "--from", "claude", "--to", "codex", "--format", "json",
+        ])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let json: Value = serde_json::from_slice(&output).unwrap();
+
+    assert_eq!(json["actions"].as_array().unwrap().len(), 1);
+    assert_eq!(json["actions"][0]["action"], "block");
+    assert_eq!(json["actions"][0]["resource_id"], "subagents:reviewer");
 }
 
 #[test]
