@@ -185,7 +185,7 @@ Review carefully.
 }
 
 #[test]
-fn scan_json_includes_opencode_config_commands_as_blocked() {
+fn scan_json_includes_opencode_config_commands_as_structured_prompt_data() {
     let dir = tempdir().unwrap();
     fs::write(
         dir.path().join("opencode.json"),
@@ -207,15 +207,14 @@ fn scan_json_includes_opencode_config_commands_as_blocked() {
         .as_array()
         .unwrap()
         .iter()
-        .find(|resource| resource["id"] == "commands:opencode:opencode.json")
+        .find(|resource| resource["id"] == "commands:opencode:opencode.json:deploy")
         .unwrap();
 
     assert_eq!(command["kind"], "command");
-    assert_eq!(command["support"], "blocked");
-    assert!(command["native_extensions"]["native.raw"]
-        .as_str()
-        .unwrap()
-        .contains("\"command\""));
+    assert_eq!(command["support"], "portable");
+    assert_eq!(command["command"]["name"], "deploy");
+    assert_eq!(command["command"]["template"], "Deploy the app");
+    assert!(command["native_extensions"]["opencode.config"]["command"]["deploy"].is_object());
 }
 
 #[test]
@@ -307,7 +306,7 @@ fn scan_json_includes_opencode_jsonc_config_resources() {
         .any(|resource| resource["id"] == "subagents:opencode:opencode.jsonc"));
     assert!(normalized
         .iter()
-        .any(|resource| resource["id"] == "commands:opencode:opencode.jsonc"));
+        .any(|resource| resource["id"] == "commands:opencode:opencode.jsonc:deploy"));
     assert!(normalized
         .iter()
         .any(|resource| resource["id"] == "plugins:opencode:opencode.jsonc"));

@@ -823,18 +823,15 @@ fn diff_command_returns_blocked_plan() {
         json["actions"][0]["resource_id"],
         "commands:opencode:.opencode/commands/deploy.md"
     );
-    assert!(json["diagnostics"][0]["message"]
-        .as_str()
-        .unwrap()
-        .contains("behavioral resources are blocked"));
+    assert_eq!(json["actions"][0]["reason"], "non-portable");
 }
 
 #[test]
-fn diff_opencode_config_command_returns_blocked_plan() {
+fn diff_opencode_config_command_renders_prompt_only_open_code_markdown() {
     let dir = tempdir().unwrap();
     fs::write(
         dir.path().join("opencode.json"),
-        r#"{"command":{"deploy":{"template":"Deploy the app"}}}"#,
+        r#"{"command":{"deploy":{"template":"Deploy the app","description":"Deploy"}}}"#,
     )
     .unwrap();
 
@@ -842,7 +839,8 @@ fn diff_opencode_config_command_returns_blocked_plan() {
         .unwrap()
         .current_dir(dir.path())
         .args([
-            "diff", "command", "--from", "opencode", "--to", "codex", "--format", "json",
+            "diff", "command", "deploy", "--from", "opencode", "--to", "opencode", "--format",
+            "json",
         ])
         .assert()
         .success()
@@ -851,11 +849,16 @@ fn diff_opencode_config_command_returns_blocked_plan() {
         .clone();
     let json: Value = serde_json::from_slice(&output).unwrap();
 
-    assert_eq!(json["actions"][0]["action"], "block");
+    assert_eq!(json["actions"][0]["action"], "create");
     assert_eq!(
         json["actions"][0]["resource_id"],
-        "commands:opencode:opencode.json"
+        "commands:opencode:opencode.json:deploy"
     );
+    assert_eq!(json["actions"][0]["path"], ".opencode/commands/deploy.md");
+    assert!(json["actions"][0]["diff"]
+        .as_str()
+        .unwrap()
+        .contains("Deploy the app"));
 }
 
 #[test]
@@ -869,6 +872,63 @@ fn sync_command_write_is_blocked_before_state_write() {
         .current_dir(dir.path())
         .args([
             "sync", "commands", "--from", "opencode", "--to", "codex", "--write",
+        ])
+        .assert()
+        .failure();
+
+    assert!(!dir.path().join(".agentsync/state.json").exists());
+}
+
+#[test]
+fn sync_opencode_config_command_write_creates_markdown_and_state() {
+    let dir = tempdir().unwrap();
+    fs::write(
+        dir.path().join("opencode.json"),
+        r#"{"command":{"deploy":{"template":"Deploy the app","description":"Deploy"}}}"#,
+    )
+    .unwrap();
+
+    Command::cargo_bin("agentsync")
+        .unwrap()
+        .current_dir(dir.path())
+        .args([
+            "sync", "command", "deploy", "--from", "opencode", "--to", "opencode", "--write",
+        ])
+        .assert()
+        .success();
+
+    assert!(dir.path().join(".opencode/commands/deploy.md").exists());
+    assert!(dir.path().join(".agentsync/state.json").exists());
+    let state: Value = serde_json::from_str(
+        &fs::read_to_string(dir.path().join(".agentsync/state.json")).unwrap(),
+    )
+    .unwrap();
+    assert_eq!(
+        state["resources"][0]["resource_id"],
+        "commands:opencode:opencode.json:deploy"
+    );
+    assert_eq!(state["resources"][0]["source_paths"][0], "opencode.json");
+    assert_eq!(
+        state["resources"][0]["targets"][0]["path"],
+        ".opencode/commands/deploy.md"
+    );
+}
+
+#[test]
+fn sync_command_with_shell_output_is_blocked_before_state_or_target_write() {
+    let dir = tempdir().unwrap();
+    fs::create_dir_all(dir.path().join(".opencode/commands")).unwrap();
+    fs::write(
+        dir.path().join(".opencode/commands/deploy.md"),
+        "Deploy using !`npm run build`\n",
+    )
+    .unwrap();
+
+    Command::cargo_bin("agentsync")
+        .unwrap()
+        .current_dir(dir.path())
+        .args([
+            "sync", "commands", "--from", "opencode", "--to", "opencode", "--write",
         ])
         .assert()
         .failure();

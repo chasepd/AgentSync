@@ -8,8 +8,9 @@ use walkdir::WalkDir;
 
 use crate::diagnostics::{AgentSyncError, Diagnostic, DiagnosticSeverity};
 use crate::model::{
-    AdapterCapabilities, Agent, NativeResource, NormalizedResource, RenderedFile, ResourceKind,
-    RuleSet, Scope, Skill, SkillAsset, Subagent, SupportLevel, ToolPolicy,
+    AdapterCapabilities, Agent, CommandDefinition, NativeResource, NormalizedResource,
+    RenderedFile, ResourceKind, RuleSet, Scope, Skill, SkillAsset, Subagent, SupportLevel,
+    ToolPolicy,
 };
 
 pub trait AgentAdapter {
@@ -312,15 +313,7 @@ impl AgentAdapter for OpenCodeAdapter {
             command_dir,
             scope,
         );
-        discover_json_key_files(
-            &mut resources,
-            root,
-            self.agent(),
-            ResourceKind::Command,
-            config_files,
-            "command",
-            scope,
-        );
+        discover_opencode_config_commands(&mut resources, root, config_files, scope);
         discover_ext_dir(
             &mut resources,
             root,
@@ -379,7 +372,7 @@ fn portable_capabilities(agent: Agent) -> AdapterCapabilities {
     resources.insert(ResourceKind::Skill, SupportLevel::Portable);
     resources.insert(ResourceKind::Subagent, SupportLevel::Partial);
     resources.insert(ResourceKind::Hook, SupportLevel::Blocked);
-    resources.insert(ResourceKind::Command, SupportLevel::Blocked);
+    resources.insert(ResourceKind::Command, SupportLevel::Partial);
     resources.insert(ResourceKind::Plugin, SupportLevel::Blocked);
     resources.insert(ResourceKind::Permission, SupportLevel::Blocked);
 
@@ -397,6 +390,13 @@ fn portable_capabilities(agent: Agent) -> AdapterCapabilities {
     fields.insert("subagent.mode".to_string(), SupportLevel::Partial);
     fields.insert("subagent.tools".to_string(), SupportLevel::Blocked);
     fields.insert("subagent.permissions".to_string(), SupportLevel::Blocked);
+    fields.insert("command.name".to_string(), SupportLevel::Portable);
+    fields.insert("command.template".to_string(), SupportLevel::Portable);
+    fields.insert("command.description".to_string(), SupportLevel::Portable);
+    fields.insert("command.agent".to_string(), SupportLevel::Blocked);
+    fields.insert("command.model".to_string(), SupportLevel::Partial);
+    fields.insert("command.subtask".to_string(), SupportLevel::Blocked);
+    fields.insert("command.shell_output".to_string(), SupportLevel::Blocked);
     fields.insert("behavior.executable".to_string(), SupportLevel::Blocked);
 
     AdapterCapabilities {
@@ -524,6 +524,38 @@ fn discover_json_key_files<const N: usize>(
     }
 }
 
+fn discover_opencode_config_commands<const N: usize>(
+    resources: &mut Vec<NativeResource>,
+    root: &Path,
+    files: [&str; N],
+    scope: Scope,
+) {
+    for file in files {
+        let abs = root.join(file);
+        if !abs.is_file() {
+            continue;
+        }
+        let Ok(raw) = fs::read_to_string(&abs) else {
+            continue;
+        };
+        let Ok(value) = parse_jsonc_value(&raw) else {
+            continue;
+        };
+        let Some(commands) = value.get("command").and_then(Value::as_object) else {
+            continue;
+        };
+        for name in commands.keys() {
+            resources.push(NativeResource {
+                id: format!("commands:opencode:{}:{name}", file.replace('\\', "/")),
+                agent: Agent::OpenCode,
+                kind: ResourceKind::Command,
+                scope,
+                path: PathBuf::from(file),
+            });
+        }
+    }
+}
+
 fn native(agent: Agent, kind: ResourceKind, rel: &str, scope: Scope) -> NativeResource {
     NativeResource {
         id: format!(
@@ -552,6 +584,12 @@ fn normalize_native(
             Ok(blocked_behavior(root, native))
         }
         ResourceKind::Subagent => normalize_subagent(root, native),
+        ResourceKind::Command
+            if native.agent == Agent::OpenCode && is_opencode_config(&native.path) =>
+        {
+            normalize_opencode_config_command(root, native)
+        }
+        ResourceKind::Command if native.agent == Agent::OpenCode => normalize_command(root, native),
         ResourceKind::Hook
         | ResourceKind::Command
         | ResourceKind::Plugin
@@ -580,6 +618,7 @@ fn normalize_rule(
         rule_set: Some(RuleSet { body }),
         skill: None,
         subagent: None,
+        command: None,
         native_extensions: BTreeMap::new(),
         diagnostics: Vec::new(),
         support: SupportLevel::Portable,
@@ -687,6 +726,7 @@ fn normalize_opencode_config_rules(
         }),
         skill: None,
         subagent: None,
+        command: None,
         native_extensions,
         diagnostics,
         support,
@@ -830,6 +870,7 @@ fn normalize_skill(
             frontmatter,
         }),
         subagent: None,
+        command: None,
         native_extensions,
         diagnostics,
         support,
@@ -926,6 +967,163 @@ fn normalize_subagent(
             tools,
             permissions,
             mode,
+            frontmatter,
+        }),
+        command: None,
+        native_extensions,
+        diagnostics,
+        support,
+    })
+}
+
+fn normalize_command(
+    root: &Path,
+    native: &NativeResource,
+) -> Result<NormalizedResource, AgentSyncError> {
+    let path = root.join(&native.path);
+    let raw = fs::read_to_string(&path)?;
+    let (frontmatter, template) = split_frontmatter(&raw).map_err(|error| {
+        AgentSyncError::Adapter(format!(
+            "failed to parse frontmatter in {}: {error}",
+            native.path.display()
+        ))
+    })?;
+    let name = path
+        .file_stem()
+        .and_then(|name| name.to_str())
+        .map(ToOwned::to_owned)
+        .unwrap_or_else(|| "command".to_string());
+    command_resource(native, name, template, frontmatter, BTreeMap::new())
+}
+
+fn normalize_opencode_config_command(
+    root: &Path,
+    native: &NativeResource,
+) -> Result<NormalizedResource, AgentSyncError> {
+    let config = parse_opencode_config(root, native)?;
+    let name = native
+        .id
+        .rsplit(':')
+        .next()
+        .map(ToOwned::to_owned)
+        .unwrap_or_else(|| "command".to_string());
+    let Some(command) = config
+        .get("command")
+        .and_then(Value::as_object)
+        .and_then(|commands| commands.get(&name))
+        .cloned()
+    else {
+        return Ok(blocked_behavior(root, native));
+    };
+    let mut native_extensions = BTreeMap::new();
+    native_extensions.insert("opencode.config".to_string(), config);
+    let Some(object) = command.as_object() else {
+        let mut resource = command_resource(
+            native,
+            name,
+            String::new(),
+            BTreeMap::new(),
+            native_extensions,
+        )?;
+        resource.support = SupportLevel::Blocked;
+        resource.diagnostics.push(command_diagnostic(
+            native,
+            "command.config: blocked because command config entries must be objects",
+        ));
+        return Ok(resource);
+    };
+    let template = object
+        .get("template")
+        .and_then(Value::as_str)
+        .map(ToOwned::to_owned)
+        .unwrap_or_default();
+    let frontmatter = object
+        .iter()
+        .filter(|(key, _)| key.as_str() != "template")
+        .map(|(key, value)| (key.clone(), value.clone()))
+        .collect::<BTreeMap<_, _>>();
+    command_resource(native, name, template, frontmatter, native_extensions)
+}
+
+fn command_resource(
+    native: &NativeResource,
+    name: String,
+    template: String,
+    frontmatter: BTreeMap<String, Value>,
+    mut native_extensions: BTreeMap<String, Value>,
+) -> Result<NormalizedResource, AgentSyncError> {
+    let mut diagnostics = Vec::new();
+    let mut support = SupportLevel::Portable;
+    if !is_safe_file_stem(&name) {
+        support = SupportLevel::Blocked;
+        diagnostics.push(command_diagnostic(
+            native,
+            "command.name: blocked because rendered file names may not contain path separators",
+        ));
+    }
+    if template.trim().is_empty() {
+        support = SupportLevel::Blocked;
+        diagnostics.push(command_diagnostic(
+            native,
+            "command.template: blocked because prompt-only commands require a template",
+        ));
+    }
+    if contains_shell_output(&template) {
+        support = SupportLevel::Blocked;
+        diagnostics.push(command_diagnostic(
+            native,
+            "command.shell_output: blocked because shell output injection is executable behavior",
+        ));
+    }
+    let command_native_extensions = unsupported_command_frontmatter_extensions(
+        native,
+        &frontmatter,
+        &mut diagnostics,
+        &mut support,
+    );
+    native_extensions.extend(command_native_extensions);
+    let description = frontmatter_string(&frontmatter, &["description"]);
+    let agent = frontmatter_string(&frontmatter, &["agent"]);
+    let model = frontmatter_string(&frontmatter, &["model"]);
+    let subtask = frontmatter.get("subtask").and_then(Value::as_bool);
+    diagnostics.extend(command_field_diagnostics(
+        native,
+        agent.is_some(),
+        model.is_some(),
+        subtask.is_some(),
+    ));
+    if command_has_blocking_diagnostics(&diagnostics) {
+        support = SupportLevel::Blocked;
+    } else if native_extensions.contains_key("frontmatter.native") {
+        support = SupportLevel::Blocked;
+        diagnostics.push(command_diagnostic(
+            native,
+            "command.native_extensions: blocked until native-only fields can be rendered safely",
+        ));
+    } else if support == SupportLevel::Portable
+        && diagnostics
+            .iter()
+            .any(|diagnostic| diagnostic.message.contains(": partial"))
+    {
+        support = SupportLevel::Partial;
+    }
+
+    Ok(NormalizedResource {
+        id: native.id.clone(),
+        kind: ResourceKind::Command,
+        scope: native.scope,
+        source_agent: native.agent,
+        native_paths: vec![native.path.clone()],
+        rule_set: None,
+        skill: None,
+        subagent: None,
+        command: Some(CommandDefinition {
+            name,
+            template,
+            description,
+            agent,
+            model,
+            subtask,
             frontmatter,
         }),
         native_extensions,
@@ -1090,6 +1288,61 @@ fn subagent_has_blocking_diagnostics(diagnostics: &[Diagnostic]) -> bool {
     })
 }
 
+fn command_field_diagnostics(
+    native: &NativeResource,
+    has_agent: bool,
+    has_model: bool,
+    has_subtask: bool,
+) -> Vec<Diagnostic> {
+    let mut diagnostics = vec![
+        command_diagnostic(native, "command.name: portable"),
+        command_diagnostic(native, "command.template: portable"),
+        command_diagnostic(native, "command.description: portable"),
+    ];
+    if has_agent {
+        diagnostics.push(command_diagnostic(
+            native,
+            "command.agent: blocked until command execution behavior is explicitly allowed",
+        ));
+    }
+    if has_model {
+        diagnostics.push(command_diagnostic(native, "command.model: partial"));
+    }
+    if has_subtask {
+        diagnostics.push(command_diagnostic(
+            native,
+            "command.subtask: blocked until subagent command execution behavior is explicitly allowed",
+        ));
+    }
+    diagnostics
+}
+
+fn command_diagnostic(native: &NativeResource, message: &str) -> Diagnostic {
+    Diagnostic {
+        severity: if message.contains("blocked") {
+            DiagnosticSeverity::Warning
+        } else {
+            DiagnosticSeverity::Info
+        },
+        resource_id: Some(native.id.clone()),
+        resource_kind: Some(ResourceKind::Command),
+        agent: Some(native.agent),
+        message: message.to_string(),
+    }
+}
+
+fn command_has_blocking_diagnostics(diagnostics: &[Diagnostic]) -> bool {
+    diagnostics.iter().any(|diagnostic| {
+        diagnostic.resource_kind == Some(ResourceKind::Command)
+            && diagnostic.severity == DiagnosticSeverity::Warning
+            && diagnostic.message.contains("blocked")
+    })
+}
+
+fn contains_shell_output(template: &str) -> bool {
+    template.contains("!`")
+}
+
 fn blocked_behavior(root: &Path, native: &NativeResource) -> NormalizedResource {
     let mut native_extensions = BTreeMap::new();
     let mut diagnostics = vec![Diagnostic {
@@ -1123,6 +1376,7 @@ fn blocked_behavior(root: &Path, native: &NativeResource) -> NormalizedResource 
         rule_set: None,
         skill: None,
         subagent: None,
+        command: None,
         native_extensions,
         diagnostics,
         support: SupportLevel::Blocked,
@@ -1238,6 +1492,45 @@ fn unsupported_subagent_frontmatter_extensions(
     native_extensions
 }
 
+fn unsupported_command_frontmatter_extensions(
+    native: &NativeResource,
+    frontmatter: &BTreeMap<String, Value>,
+    diagnostics: &mut Vec<Diagnostic>,
+    support: &mut SupportLevel,
+) -> BTreeMap<String, Value> {
+    let supported_keys = ["description", "agent", "model", "subtask"];
+    let unsupported = frontmatter
+        .iter()
+        .filter(|(key, _)| !supported_keys.contains(&key.as_str()))
+        .map(|(key, value)| (key.clone(), value.clone()))
+        .collect::<BTreeMap<_, _>>();
+    if unsupported.is_empty() {
+        return BTreeMap::new();
+    }
+
+    if *support == SupportLevel::Portable {
+        *support = SupportLevel::Partial;
+    }
+    diagnostics.push(Diagnostic {
+        severity: DiagnosticSeverity::Warning,
+        resource_id: Some(native.id.clone()),
+        resource_kind: Some(ResourceKind::Command),
+        agent: Some(native.agent),
+        message: format!(
+            "{} frontmatter contains native-only fields that are preserved but not rendered: {}",
+            native.kind.as_str(),
+            unsupported.keys().cloned().collect::<Vec<_>>().join(", ")
+        ),
+    });
+
+    let mut native_extensions = BTreeMap::new();
+    native_extensions.insert(
+        "frontmatter.native".to_string(),
+        Value::Object(unsupported.into_iter().collect()),
+    );
+    native_extensions
+}
+
 fn split_frontmatter(raw: &str) -> Result<(BTreeMap<String, Value>, String), serde_yaml::Error> {
     if let Some(rest) = raw.strip_prefix("---\n") {
         if let Some(end) = rest.find("\n---\n") {
@@ -1262,8 +1555,10 @@ fn render_native(
         ResourceKind::RuleSet => render_rules(resource, target),
         ResourceKind::Skill => render_skill(resource, target),
         ResourceKind::Subagent => render_subagent(resource, target),
+        ResourceKind::Command => render_command(resource, target),
         _ => Err(AgentSyncError::InvalidArgument(
-            "only rules, skills, and portable subagents can be rendered".to_string(),
+            "only rules, skills, portable subagents, and prompt-only commands can be rendered"
+                .to_string(),
         )),
     }
 }
@@ -1446,6 +1741,65 @@ fn render_codex_subagent(
     ))
 }
 
+fn render_command(
+    resource: &NormalizedResource,
+    target: Agent,
+) -> Result<(Vec<RenderedFile>, Vec<Diagnostic>), AgentSyncError> {
+    let command = resource
+        .command
+        .as_ref()
+        .ok_or_else(|| AgentSyncError::Adapter("missing command template".to_string()))?;
+    match target {
+        Agent::OpenCode => render_opencode_command(command),
+        _ => Err(AgentSyncError::InvalidArgument(
+            "command rendering is currently only supported for OpenCode targets".to_string(),
+        )),
+    }
+}
+
+fn render_opencode_command(
+    command: &CommandDefinition,
+) -> Result<(Vec<RenderedFile>, Vec<Diagnostic>), AgentSyncError> {
+    let mut frontmatter = BTreeMap::new();
+    if let Some(description) = &command.description {
+        frontmatter.insert(
+            "description".to_string(),
+            Value::String(description.clone()),
+        );
+    }
+    if let Some(agent) = &command.agent {
+        frontmatter.insert("agent".to_string(), Value::String(agent.clone()));
+    }
+    if let Some(model) = &command.model {
+        frontmatter.insert("model".to_string(), Value::String(model.clone()));
+    }
+    if let Some(subtask) = command.subtask {
+        frontmatter.insert("subtask".to_string(), Value::Bool(subtask));
+    }
+    let mut contents = String::new();
+    if !frontmatter.is_empty() {
+        contents.push_str("---\n");
+        for line in serde_yaml::to_string(&frontmatter)
+            .map_err(|error| AgentSyncError::Adapter(error.to_string()))?
+            .lines()
+        {
+            if line != "---" {
+                contents.push_str(line);
+                contents.push('\n');
+            }
+        }
+        contents.push_str("---\n");
+    }
+    contents.push_str(&command.template);
+    Ok((
+        vec![RenderedFile {
+            path: PathBuf::from(".opencode/commands").join(format!("{}.md", command.name)),
+            contents,
+        }],
+        Vec::new(),
+    ))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1477,7 +1831,7 @@ mod tests {
         );
         assert_eq!(
             capabilities.resources.get(&ResourceKind::Command),
-            Some(&SupportLevel::Blocked)
+            Some(&SupportLevel::Partial)
         );
         assert_eq!(
             capabilities.resources.get(&ResourceKind::Plugin),
@@ -1587,6 +1941,7 @@ mod tests {
             }),
             skill: None,
             subagent: None,
+            command: None,
             native_extensions: BTreeMap::new(),
             diagnostics: Vec::new(),
             support: SupportLevel::Portable,
@@ -1713,6 +2068,7 @@ Body
                 frontmatter,
             }),
             subagent: None,
+            command: None,
             native_extensions: BTreeMap::new(),
             diagnostics: Vec::new(),
             support: SupportLevel::Portable,
@@ -1943,7 +2299,7 @@ Body
     }
 
     #[test]
-    fn opencode_config_command_is_discovered_as_blocked_behavior() {
+    fn opencode_config_command_is_normalized_as_prompt_data() {
         let dir = tempdir().unwrap();
         fs::write(
             dir.path().join("opencode.json"),
@@ -1963,17 +2319,16 @@ Body
             .unwrap();
         let resource = OpenCodeAdapter.read(dir.path(), command).unwrap();
 
-        assert_eq!(resource.id, "commands:opencode:opencode.json");
-        assert_eq!(resource.support, SupportLevel::Blocked);
+        assert_eq!(resource.id, "commands:opencode:opencode.json:deploy");
+        assert_eq!(resource.support, SupportLevel::Portable);
+        let command = resource.command.as_ref().unwrap();
+        assert_eq!(command.name, "deploy");
+        assert_eq!(command.template, "Deploy the app");
         assert!(resource
             .native_extensions
-            .get("native.raw")
-            .and_then(Value::as_str)
-            .unwrap()
-            .contains("\"command\""));
-        assert!(resource.diagnostics.iter().any(|diagnostic| diagnostic
-            .message
-            .contains("behavioral resources are blocked")));
+            .get("opencode.config")
+            .and_then(|value| value.get("command"))
+            .is_some());
     }
 
     #[test]

@@ -330,7 +330,13 @@ pub fn status_roots(roots: DiscoveryRoots, scope: Scope) -> Result<StatusReport,
 }
 
 fn suggested_diff_command(resource: &NormalizedResource, entry: &StateResource) -> Option<String> {
-    if !matches!(resource.kind, ResourceKind::RuleSet | ResourceKind::Skill) {
+    if !matches!(
+        resource.kind,
+        ResourceKind::RuleSet
+            | ResourceKind::Skill
+            | ResourceKind::Subagent
+            | ResourceKind::Command
+    ) {
         return None;
     }
     if entry.targets.is_empty() {
@@ -360,6 +366,10 @@ fn resource_short_name(resource: &NormalizedResource) -> Option<&str> {
             .subagent
             .as_ref()
             .map(|subagent| subagent.name.as_str()),
+        ResourceKind::Command => resource
+            .command
+            .as_ref()
+            .map(|command| command.name.as_str()),
         _ => None,
     }
 }
@@ -410,7 +420,10 @@ pub fn plan_filtered_with_options(
         for target in targets {
             if !matches!(
                 source.kind,
-                ResourceKind::RuleSet | ResourceKind::Skill | ResourceKind::Subagent
+                ResourceKind::RuleSet
+                    | ResourceKind::Skill
+                    | ResourceKind::Subagent
+                    | ResourceKind::Command
             ) {
                 diagnostics.extend(source.diagnostics.clone());
                 actions.push(block_action(source, *target, "non-portable"));
@@ -423,6 +436,13 @@ pub fn plan_filtered_with_options(
             }
             if source.kind == ResourceKind::Subagent
                 && (source.support == SupportLevel::Blocked || *target == Agent::CursorCli)
+            {
+                diagnostics.extend(source.diagnostics.clone());
+                actions.push(block_action(source, *target, "non-portable"));
+                continue;
+            }
+            if source.kind == ResourceKind::Command
+                && (source.support == SupportLevel::Blocked || *target != Agent::OpenCode)
             {
                 diagnostics.extend(source.diagnostics.clone());
                 actions.push(block_action(source, *target, "non-portable"));
@@ -586,6 +606,10 @@ fn resource_matches_name(resource: &NormalizedResource, name: &str) -> bool {
             .subagent
             .as_ref()
             .is_some_and(|subagent| subagent.name == name)
+        || resource
+            .command
+            .as_ref()
+            .is_some_and(|command| command.name == name)
         || resource.native_paths.iter().any(|path| {
             path.file_stem()
                 .and_then(|stem| stem.to_str())
@@ -1068,7 +1092,11 @@ mod tests {
     fn blocked_behavioral_resource_is_blocking_status() {
         let dir = tempdir().unwrap();
         fs::create_dir_all(dir.path().join(".opencode/commands")).unwrap();
-        fs::write(dir.path().join(".opencode/commands/deploy.md"), "deploy\n").unwrap();
+        fs::write(
+            dir.path().join(".opencode/commands/deploy.md"),
+            "deploy with !`npm run build`\n",
+        )
+        .unwrap();
 
         let status = status_root(dir.path(), Scope::Project).unwrap();
 
@@ -1708,6 +1736,89 @@ mod tests {
         assert!(report.actions[0].rendered.is_none());
         assert!(write_plan(dir.path(), &report).is_err());
         assert!(!dir.path().join(".agentsync/state.json").exists());
+    }
+
+    #[test]
+    fn prompt_only_command_plan_renders_opencode_markdown() {
+        let dir = tempdir().unwrap();
+        fs::write(
+            dir.path().join("opencode.json"),
+            r#"{"command":{"deploy":{"template":"Deploy the app","description":"Deploy","model":"anthropic/claude-sonnet-4-5"}}}"#,
+        )
+        .unwrap();
+
+        let report = plan_filtered(
+            dir.path(),
+            ResourceFilter::named(ResourceSelector::Commands, "deploy"),
+            SourceAlias::OpenCode,
+            &[Agent::OpenCode],
+        )
+        .unwrap();
+
+        assert_eq!(report.actions[0].action, PlanActionKind::Create);
+        assert_eq!(
+            report.actions[0].resource_id,
+            "commands:opencode:opencode.json:deploy"
+        );
+        let rendered = report.actions[0].rendered.as_ref().unwrap();
+        assert_eq!(rendered.path, Path::new(".opencode/commands/deploy.md"));
+        assert!(rendered.contents.contains("description: Deploy\n"));
+        assert!(rendered
+            .contents
+            .contains("model: anthropic/claude-sonnet-4-5\n"));
+        assert!(rendered.contents.ends_with("Deploy the app"));
+    }
+
+    #[test]
+    fn command_with_shell_output_is_blocked_and_not_rendered() {
+        let dir = tempdir().unwrap();
+        fs::create_dir_all(dir.path().join(".opencode/commands")).unwrap();
+        fs::write(
+            dir.path().join(".opencode/commands/deploy.md"),
+            "deploy with !`npm run build`\n",
+        )
+        .unwrap();
+
+        let report = plan(
+            dir.path(),
+            ResourceSelector::Commands,
+            SourceAlias::OpenCode,
+            &[Agent::OpenCode],
+        )
+        .unwrap();
+
+        assert_eq!(report.actions[0].action, PlanActionKind::Block);
+        assert!(report
+            .diagnostics
+            .iter()
+            .any(|diagnostic| diagnostic.message.contains("shell output")));
+        assert!(report.actions[0].rendered.is_none());
+    }
+
+    #[test]
+    fn command_with_agent_execution_behavior_is_blocked_and_not_rendered() {
+        let dir = tempdir().unwrap();
+        fs::create_dir_all(dir.path().join(".opencode/commands")).unwrap();
+        fs::write(
+            dir.path().join(".opencode/commands/deploy.md"),
+            "---\nagent: build\n---\nDeploy the app\n",
+        )
+        .unwrap();
+
+        let report = plan(
+            dir.path(),
+            ResourceSelector::Commands,
+            SourceAlias::OpenCode,
+            &[Agent::OpenCode],
+        )
+        .unwrap();
+
+        assert_eq!(report.actions[0].action, PlanActionKind::Block);
+        assert!(report
+            .diagnostics
+            .iter()
+            .any(|diagnostic| diagnostic.message.contains("command.agent: blocked")));
+        assert!(report.actions[0].rendered.is_none());
     }
 
     #[test]
