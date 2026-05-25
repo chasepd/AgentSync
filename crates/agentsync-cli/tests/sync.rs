@@ -1,8 +1,25 @@
 use std::fs;
+use std::path::Path;
+use std::time::SystemTime;
 
 use assert_cmd::Command;
 use serde_json::Value;
 use tempfile::tempdir;
+
+fn modified_time(path: &Path) -> SystemTime {
+    fs::metadata(path).unwrap().modified().unwrap()
+}
+
+fn write_until_newer(path: &Path, contents: &str, older: SystemTime) {
+    for _ in 0..100 {
+        std::thread::sleep(std::time::Duration::from_millis(10));
+        fs::write(path, contents).unwrap();
+        if modified_time(path) > older {
+            return;
+        }
+    }
+    panic!("{} mtime did not advance", path.display());
+}
 
 #[test]
 fn sync_dry_run_does_not_write_targets_or_state() {
@@ -135,6 +152,103 @@ fn sync_no_overwrite_write_does_not_replace_existing_untracked_target() {
     );
     assert!(!dir.path().join("CLAUDE.md.bak").exists());
     assert!(!dir.path().join(".agentsync/state.json").exists());
+}
+
+#[test]
+fn sync_strategy_source_updates_drifted_target_with_backup() {
+    let dir = tempdir().unwrap();
+    fs::write(dir.path().join("AGENTS.md"), "repo rules\n").unwrap();
+    Command::cargo_bin("agentsync")
+        .unwrap()
+        .current_dir(dir.path())
+        .args([
+            "sync",
+            "rules",
+            "--from",
+            "agents-md",
+            "--to",
+            "claude",
+            "--write",
+        ])
+        .assert()
+        .success();
+    fs::write(dir.path().join("CLAUDE.md"), "local edit\n").unwrap();
+    fs::write(dir.path().join("AGENTS.md"), "new repo rules\n").unwrap();
+
+    Command::cargo_bin("agentsync")
+        .unwrap()
+        .current_dir(dir.path())
+        .args([
+            "sync",
+            "rules",
+            "--from",
+            "agents-md",
+            "--to",
+            "claude",
+            "--strategy",
+            "source",
+            "--write",
+        ])
+        .assert()
+        .success();
+
+    assert_eq!(
+        fs::read_to_string(dir.path().join("CLAUDE.md")).unwrap(),
+        "new repo rules\n"
+    );
+    assert_eq!(
+        fs::read_to_string(dir.path().join("CLAUDE.md.bak")).unwrap(),
+        "local edit\n"
+    );
+}
+
+#[test]
+fn diff_strategy_newest_blocks_when_target_is_newer() {
+    let dir = tempdir().unwrap();
+    let source = dir.path().join("AGENTS.md");
+    let target = dir.path().join("CLAUDE.md");
+    fs::write(&source, "repo rules\n").unwrap();
+    Command::cargo_bin("agentsync")
+        .unwrap()
+        .current_dir(dir.path())
+        .args([
+            "sync",
+            "rules",
+            "--from",
+            "agents-md",
+            "--to",
+            "claude",
+            "--write",
+        ])
+        .assert()
+        .success();
+    write_until_newer(&source, "new repo rules\n", modified_time(&target));
+    write_until_newer(&target, "local edit\n", modified_time(&source));
+
+    let output = Command::cargo_bin("agentsync")
+        .unwrap()
+        .current_dir(dir.path())
+        .args([
+            "diff",
+            "rules",
+            "--from",
+            "agents-md",
+            "--to",
+            "claude",
+            "--strategy",
+            "newest",
+            "--format",
+            "json",
+        ])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let json: Value = serde_json::from_slice(&output).unwrap();
+
+    assert_eq!(json["actions"][0]["action"], "block");
+    assert_eq!(json["actions"][0]["reason"], "target drifted");
 }
 
 #[test]

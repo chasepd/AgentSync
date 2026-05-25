@@ -1,5 +1,6 @@
 use agentsync_core::{
-    Agent, AgentSyncError, PlanOptions, ResourceFilter, ResourceSelector, Scope, SourceAlias,
+    Agent, AgentSyncError, ConflictStrategy, PlanOptions, ResourceFilter, ResourceSelector, Scope,
+    SourceAlias,
 };
 use clap::{Parser, Subcommand, ValueEnum};
 
@@ -54,6 +55,9 @@ enum Command {
         no_overwrite: bool,
 
         #[arg(long)]
+        strategy: Option<CliConflictStrategy>,
+
+        #[arg(long)]
         json: bool,
 
         #[arg(long)]
@@ -79,6 +83,9 @@ enum Command {
 
         #[arg(long)]
         no_overwrite: bool,
+
+        #[arg(long)]
+        strategy: Option<CliConflictStrategy>,
 
         #[arg(long)]
         json: bool,
@@ -156,6 +163,12 @@ enum CliFormat {
     Json,
 }
 
+#[derive(Clone, Debug, ValueEnum)]
+enum CliConflictStrategy {
+    Source,
+    Newest,
+}
+
 impl std::fmt::Display for CliScope {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
@@ -211,6 +224,15 @@ impl From<CliAgent> for Agent {
     }
 }
 
+impl From<CliConflictStrategy> for ConflictStrategy {
+    fn from(value: CliConflictStrategy) -> Self {
+        match value {
+            CliConflictStrategy::Source => Self::Source,
+            CliConflictStrategy::Newest => Self::Newest,
+        }
+    }
+}
+
 fn main() -> Result<(), AgentSyncError> {
     let cli = Cli::parse();
 
@@ -253,6 +275,7 @@ fn main() -> Result<(), AgentSyncError> {
             from,
             to,
             no_overwrite,
+            strategy,
             json,
             format,
         } => {
@@ -264,7 +287,7 @@ fn main() -> Result<(), AgentSyncError> {
                 resource_filter(resource, name),
                 from,
                 &targets,
-                PlanOptions { no_overwrite },
+                plan_options(no_overwrite, strategy),
             )?;
             if output == CliFormat::Json {
                 println!("{}", serde_json::to_string_pretty(&report)?);
@@ -280,6 +303,7 @@ fn main() -> Result<(), AgentSyncError> {
             dry_run,
             write,
             no_overwrite,
+            strategy,
             json,
             format,
         } => {
@@ -291,7 +315,7 @@ fn main() -> Result<(), AgentSyncError> {
                 resource_filter(resource, name),
                 from,
                 &targets,
-                PlanOptions { no_overwrite },
+                plan_options(no_overwrite, strategy),
             )?;
             if output == CliFormat::Json {
                 println!("{}", serde_json::to_string_pretty(&report)?);
@@ -373,6 +397,13 @@ fn resource_filter(resource: ResourceSelector, name: Option<String>) -> Resource
     match name {
         Some(name) => ResourceFilter::named(resource, name),
         None => ResourceFilter::all(resource),
+    }
+}
+
+fn plan_options(no_overwrite: bool, strategy: Option<CliConflictStrategy>) -> PlanOptions {
+    PlanOptions {
+        no_overwrite,
+        strategy: strategy.map(ConflictStrategy::from).unwrap_or_default(),
     }
 }
 

@@ -228,9 +228,30 @@ impl ResourceFilter {
     }
 }
 
-#[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct PlanOptions {
+    #[serde(default)]
     pub no_overwrite: bool,
+    #[serde(default)]
+    pub strategy: ConflictStrategy,
+}
+
+impl Default for PlanOptions {
+    fn default() -> Self {
+        Self {
+            no_overwrite: false,
+            strategy: ConflictStrategy::Conservative,
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ConflictStrategy {
+    #[default]
+    Conservative,
+    Source,
+    Newest,
 }
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
