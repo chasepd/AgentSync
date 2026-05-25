@@ -1,4 +1,4 @@
-use agentsync_core::{Agent, AgentSyncError, ResourceSelector, Scope, SourceAlias};
+use agentsync_core::{Agent, AgentSyncError, ResourceFilter, ResourceSelector, Scope, SourceAlias};
 use clap::{Parser, Subcommand, ValueEnum};
 
 #[derive(Debug, Parser)]
@@ -40,6 +40,8 @@ enum Command {
     Diff {
         resource: CliResource,
 
+        name: Option<String>,
+
         #[arg(long)]
         from: Option<CliSource>,
 
@@ -55,6 +57,8 @@ enum Command {
     /// Generate or update target formats. Writes require --write.
     Sync {
         resource: CliResource,
+
+        name: Option<String>,
 
         #[arg(long)]
         from: Option<CliSource>,
@@ -237,6 +241,7 @@ fn main() -> Result<(), AgentSyncError> {
         }
         Command::Diff {
             resource,
+            name,
             from,
             to,
             json,
@@ -245,7 +250,12 @@ fn main() -> Result<(), AgentSyncError> {
             let output = resolve_output_format(json, format);
             let resource: ResourceSelector = resource.into();
             let (from, targets) = resolve_plan_args(resource, from, to)?;
-            let report = agentsync_core::plan(std::env::current_dir()?, resource, from, &targets)?;
+            let report = agentsync_core::plan_filtered(
+                std::env::current_dir()?,
+                resource_filter(resource, name),
+                from,
+                &targets,
+            )?;
             if output == CliFormat::Json {
                 println!("{}", serde_json::to_string_pretty(&report)?);
             } else {
@@ -254,6 +264,7 @@ fn main() -> Result<(), AgentSyncError> {
         }
         Command::Sync {
             resource,
+            name,
             from,
             to,
             dry_run,
@@ -264,7 +275,12 @@ fn main() -> Result<(), AgentSyncError> {
             let output = resolve_output_format(json, format);
             let resource: ResourceSelector = resource.into();
             let (from, targets) = resolve_plan_args(resource, from, to)?;
-            let report = agentsync_core::plan(std::env::current_dir()?, resource, from, &targets)?;
+            let report = agentsync_core::plan_filtered(
+                std::env::current_dir()?,
+                resource_filter(resource, name),
+                from,
+                &targets,
+            )?;
             if output == CliFormat::Json {
                 println!("{}", serde_json::to_string_pretty(&report)?);
             } else {
@@ -339,6 +355,13 @@ fn resolve_scope(scope: Option<CliScope>) -> Result<Scope, AgentSyncError> {
             .and_then(|config| config.defaults.scope)
             .unwrap_or(Scope::Project),
     )
+}
+
+fn resource_filter(resource: ResourceSelector, name: Option<String>) -> ResourceFilter {
+    match name {
+        Some(name) => ResourceFilter::named(resource, name),
+        None => ResourceFilter::all(resource),
+    }
 }
 
 fn resolve_plan_args(

@@ -164,6 +164,28 @@ impl ResourceSelector {
     }
 }
 
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct ResourceFilter {
+    pub selector: ResourceSelector,
+    pub name: Option<String>,
+}
+
+impl ResourceFilter {
+    pub fn all(selector: ResourceSelector) -> Self {
+        Self {
+            selector,
+            name: None,
+        }
+    }
+
+    pub fn named(selector: ResourceSelector, name: impl Into<String>) -> Self {
+        Self {
+            selector,
+            name: Some(name.into()),
+        }
+    }
+}
+
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum SourceAlias {

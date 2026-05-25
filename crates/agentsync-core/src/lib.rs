@@ -21,7 +21,7 @@ use sha2::{Digest, Sha256};
 use state::{load_state, save_state, StateFile, StateResource, StateTarget};
 
 pub use diagnostics::{AgentSyncError, Diagnostic, DiagnosticSeverity};
-pub use model::{Agent, ResourceKind, ResourceSelector, Scope, SourceAlias};
+pub use model::{Agent, ResourceFilter, ResourceKind, ResourceSelector, Scope, SourceAlias};
 
 pub fn scan(scope: Scope) -> Result<ScanReport, AgentSyncError> {
     scan_root(std::env::current_dir()?, scope)
@@ -300,10 +300,25 @@ fn suggested_diff_command(resource: &NormalizedResource, entry: &StateResource) 
         .map(|target| target.agent.as_str())
         .collect::<Vec<_>>()
         .join(",");
+    let name = resource_short_name(resource)
+        .map(|name| format!(" {name}"))
+        .unwrap_or_default();
     Some(format!(
-        "agentsync diff {} --from {from} --to {to}",
-        resource.kind.as_str()
+        "agentsync diff {}{} --from {from} --to {to}",
+        resource.kind.as_str(),
+        name
     ))
+}
+
+fn resource_short_name(resource: &NormalizedResource) -> Option<&str> {
+    match resource.kind {
+        ResourceKind::Skill => resource.skill.as_ref().map(|skill| skill.name.as_str()),
+        ResourceKind::Subagent => resource
+            .subagent
+            .as_ref()
+            .map(|subagent| subagent.name.as_str()),
+        _ => None,
+    }
 }
 
 fn source_alias_for_resource(resource: &NormalizedResource) -> &'static str {
@@ -323,10 +338,19 @@ pub fn plan(
     from: SourceAlias,
     targets: &[Agent],
 ) -> Result<PlanReport, AgentSyncError> {
+    plan_filtered(root, ResourceFilter::all(selector), from, targets)
+}
+
+pub fn plan_filtered(
+    root: impl AsRef<Path>,
+    filter: ResourceFilter,
+    from: SourceAlias,
+    targets: &[Agent],
+) -> Result<PlanReport, AgentSyncError> {
     let root = root.as_ref();
     let scan = scan_root(root, Scope::Project)?;
     let state = load_state(root)?;
-    let sources = select_sources(&scan.normalized, selector, from)?;
+    let sources = select_sources(&scan.normalized, &filter, from)?;
     let mut actions = Vec::new();
     let mut diagnostics = Vec::new();
     for source in sources {
@@ -439,12 +463,12 @@ pub fn write_plan(root: impl AsRef<Path>, report: &PlanReport) -> Result<(), Age
     save_state_from_plan(root, report)
 }
 
-fn select_sources(
-    resources: &[NormalizedResource],
-    selector: ResourceSelector,
+fn select_sources<'a>(
+    resources: &'a [NormalizedResource],
+    filter: &ResourceFilter,
     from: SourceAlias,
-) -> Result<Vec<&NormalizedResource>, AgentSyncError> {
-    let kind = match selector {
+) -> Result<Vec<&'a NormalizedResource>, AgentSyncError> {
+    let kind = match filter.selector {
         ResourceSelector::Rules => ResourceKind::RuleSet,
         ResourceSelector::Skills => ResourceKind::Skill,
         ResourceSelector::Subagents => ResourceKind::Subagent,
@@ -464,17 +488,47 @@ fn select_sources(
             SourceAlias::CursorCli => resource.source_agent == Agent::CursorCli,
             SourceAlias::OpenCode => resource.source_agent == Agent::OpenCode,
         })
+        .filter(|resource| {
+            filter
+                .name
+                .as_deref()
+                .is_none_or(|name| resource_matches_name(resource, name))
+        })
         .collect::<Vec<_>>();
-    if selector == ResourceSelector::Rules {
+    if filter.selector == ResourceSelector::Rules && filter.name.is_none() {
         selected.truncate(1);
     }
     if selected.is_empty() {
-        Err(AgentSyncError::InvalidArgument(
-            "requested source resource was not found".to_string(),
-        ))
+        let suffix = filter
+            .name
+            .as_ref()
+            .map(|name| format!(" named {name:?}"))
+            .unwrap_or_default();
+        Err(AgentSyncError::InvalidArgument(format!(
+            "requested source resource{} was not found",
+            suffix
+        )))
     } else {
         Ok(selected)
     }
+}
+
+fn resource_matches_name(resource: &NormalizedResource, name: &str) -> bool {
+    resource.id == name
+        || resource.id.rsplit(':').next() == Some(name)
+        || resource
+            .skill
+            .as_ref()
+            .is_some_and(|skill| skill.name == name)
+        || resource
+            .subagent
+            .as_ref()
+            .is_some_and(|subagent| subagent.name == name)
+        || resource.native_paths.iter().any(|path| {
+            path.file_stem()
+                .and_then(|stem| stem.to_str())
+                .is_some_and(|stem| stem == name)
+        })
 }
 
 fn render_for_target(
@@ -1086,6 +1140,40 @@ mod tests {
             fs::read_to_string(dir.path().join(".codex/skills/review/assets/guide.md")).unwrap(),
             "asset body\n"
         );
+    }
+
+    #[test]
+    fn resource_filter_limits_plan_to_named_skill() {
+        let dir = tempdir().unwrap();
+        fs::create_dir_all(dir.path().join(".claude/skills/review")).unwrap();
+        fs::create_dir_all(dir.path().join(".claude/skills/lint")).unwrap();
+        fs::write(
+            dir.path().join(".claude/skills/review/SKILL.md"),
+            "---\nname: review\n---\nReview body\n",
+        )
+        .unwrap();
+        fs::write(
+            dir.path().join(".claude/skills/lint/SKILL.md"),
+            "---\nname: lint\n---\nLint body\n",
+        )
+        .unwrap();
+
+        let report = plan_filtered(
+            dir.path(),
+            ResourceFilter::named(ResourceSelector::Skills, "review"),
+            SourceAlias::Claude,
+            &[Agent::Codex],
+        )
+        .unwrap();
+
+        assert!(report
+            .actions
+            .iter()
+            .any(|action| action.path == Path::new(".codex/skills/review/SKILL.md")));
+        assert!(!report
+            .actions
+            .iter()
+            .any(|action| action.path == Path::new(".codex/skills/lint/SKILL.md")));
     }
 
     #[test]
