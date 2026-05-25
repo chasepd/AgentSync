@@ -1,4 +1,6 @@
-use agentsync_core::{Agent, AgentSyncError, ResourceFilter, ResourceSelector, Scope, SourceAlias};
+use agentsync_core::{
+    Agent, AgentSyncError, PlanOptions, ResourceFilter, ResourceSelector, Scope, SourceAlias,
+};
 use clap::{Parser, Subcommand, ValueEnum};
 
 #[derive(Debug, Parser)]
@@ -49,6 +51,9 @@ enum Command {
         to: Vec<CliAgent>,
 
         #[arg(long)]
+        no_overwrite: bool,
+
+        #[arg(long)]
         json: bool,
 
         #[arg(long)]
@@ -71,6 +76,9 @@ enum Command {
 
         #[arg(long)]
         write: bool,
+
+        #[arg(long)]
+        no_overwrite: bool,
 
         #[arg(long)]
         json: bool,
@@ -244,17 +252,19 @@ fn main() -> Result<(), AgentSyncError> {
             name,
             from,
             to,
+            no_overwrite,
             json,
             format,
         } => {
             let output = resolve_output_format(json, format);
             let resource: ResourceSelector = resource.into();
             let (from, targets) = resolve_plan_args(resource, from, to)?;
-            let report = agentsync_core::plan_filtered(
+            let report = agentsync_core::plan_filtered_with_options(
                 std::env::current_dir()?,
                 resource_filter(resource, name),
                 from,
                 &targets,
+                PlanOptions { no_overwrite },
             )?;
             if output == CliFormat::Json {
                 println!("{}", serde_json::to_string_pretty(&report)?);
@@ -269,17 +279,19 @@ fn main() -> Result<(), AgentSyncError> {
             to,
             dry_run,
             write,
+            no_overwrite,
             json,
             format,
         } => {
             let output = resolve_output_format(json, format);
             let resource: ResourceSelector = resource.into();
             let (from, targets) = resolve_plan_args(resource, from, to)?;
-            let report = agentsync_core::plan_filtered(
+            let report = agentsync_core::plan_filtered_with_options(
                 std::env::current_dir()?,
                 resource_filter(resource, name),
                 from,
                 &targets,
+                PlanOptions { no_overwrite },
             )?;
             if output == CliFormat::Json {
                 println!("{}", serde_json::to_string_pretty(&report)?);

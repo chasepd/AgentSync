@@ -72,6 +72,72 @@ fn sync_write_creates_target_and_state() {
 }
 
 #[test]
+fn diff_no_overwrite_blocks_existing_untracked_target() {
+    let dir = tempdir().unwrap();
+    fs::write(dir.path().join("AGENTS.md"), "repo rules\n").unwrap();
+    fs::write(dir.path().join("CLAUDE.md"), "existing local rules\n").unwrap();
+
+    let output = Command::cargo_bin("agentsync")
+        .unwrap()
+        .current_dir(dir.path())
+        .args([
+            "diff",
+            "rules",
+            "--from",
+            "agents-md",
+            "--to",
+            "claude",
+            "--no-overwrite",
+            "--format",
+            "json",
+        ])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let json: Value = serde_json::from_slice(&output).unwrap();
+
+    assert_eq!(json["actions"][0]["action"], "block");
+    assert_eq!(json["actions"][0]["reason"], "target exists");
+    assert_eq!(
+        fs::read_to_string(dir.path().join("CLAUDE.md")).unwrap(),
+        "existing local rules\n"
+    );
+    assert!(!dir.path().join(".agentsync/state.json").exists());
+}
+
+#[test]
+fn sync_no_overwrite_write_does_not_replace_existing_untracked_target() {
+    let dir = tempdir().unwrap();
+    fs::write(dir.path().join("AGENTS.md"), "repo rules\n").unwrap();
+    fs::write(dir.path().join("CLAUDE.md"), "existing local rules\n").unwrap();
+
+    Command::cargo_bin("agentsync")
+        .unwrap()
+        .current_dir(dir.path())
+        .args([
+            "sync",
+            "rules",
+            "--from",
+            "agents-md",
+            "--to",
+            "claude",
+            "--no-overwrite",
+            "--write",
+        ])
+        .assert()
+        .failure();
+
+    assert_eq!(
+        fs::read_to_string(dir.path().join("CLAUDE.md")).unwrap(),
+        "existing local rules\n"
+    );
+    assert!(!dir.path().join("CLAUDE.md.bak").exists());
+    assert!(!dir.path().join(".agentsync/state.json").exists());
+}
+
+#[test]
 fn sync_skills_write_creates_text_assets() {
     let dir = tempdir().unwrap();
     fs::create_dir_all(dir.path().join(".claude/skills/review/assets")).unwrap();
