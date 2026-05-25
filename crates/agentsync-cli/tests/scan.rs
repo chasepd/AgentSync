@@ -131,7 +131,16 @@ fn scan_json_includes_normalized_subagent_fields() {
     fs::create_dir_all(dir.path().join(".claude/agents")).unwrap();
     fs::write(
         dir.path().join(".claude/agents/reviewer.md"),
-        "---\nname: reviewer\ndescription: Review code\n---\nReview carefully.\n",
+        r#"---
+name: reviewer
+description: Review code
+model: sonnet
+tools:
+  - Read
+  - Grep
+---
+Review carefully.
+"#,
     )
     .unwrap();
 
@@ -157,6 +166,22 @@ fn scan_json_includes_normalized_subagent_fields() {
     assert_eq!(subagent["subagent"]["name"], "reviewer");
     assert_eq!(subagent["subagent"]["description"], "Review code");
     assert_eq!(subagent["subagent"]["body"], "Review carefully.\n");
+    assert_eq!(subagent["subagent"]["instructions"], "Review carefully.\n");
+    assert_eq!(subagent["subagent"]["model"], "sonnet");
+    assert_eq!(subagent["subagent"]["tools"]["allow"][0], "Read");
+    assert!(subagent["diagnostics"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|diagnostic| diagnostic["message"] == "subagent.model: partial"));
+    assert!(subagent["diagnostics"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|diagnostic| diagnostic["message"]
+            .as_str()
+            .unwrap()
+            .contains("subagent.tools: blocked")));
 }
 
 #[test]
