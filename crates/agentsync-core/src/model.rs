@@ -101,6 +101,8 @@ pub struct NormalizedResource {
     pub rule_set: Option<RuleSet>,
     pub skill: Option<Skill>,
     pub subagent: Option<Subagent>,
+    #[serde(default)]
+    pub command: Option<CommandDefinition>,
     pub native_extensions: BTreeMap<String, serde_json::Value>,
     pub diagnostics: Vec<crate::diagnostics::Diagnostic>,
     pub support: SupportLevel,
@@ -152,6 +154,21 @@ pub struct ToolPolicy {
     pub allow: Vec<String>,
     pub deny: Vec<String>,
     pub native: Option<serde_json::Value>,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct CommandDefinition {
+    pub name: String,
+    pub template: String,
+    #[serde(default)]
+    pub description: Option<String>,
+    #[serde(default)]
+    pub agent: Option<String>,
+    #[serde(default)]
+    pub model: Option<String>,
+    #[serde(default)]
+    pub subtask: Option<bool>,
+    pub frontmatter: BTreeMap<String, serde_json::Value>,
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
