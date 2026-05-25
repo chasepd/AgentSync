@@ -648,7 +648,7 @@ fn sync_format_json_outputs_json_and_does_not_write() {
 }
 
 #[test]
-fn diff_subagent_returns_blocked_plan() {
+fn diff_subagent_returns_rendered_plan() {
     let dir = tempdir().unwrap();
     fs::create_dir_all(dir.path().join(".claude/agents")).unwrap();
     fs::write(
@@ -670,12 +670,13 @@ fn diff_subagent_returns_blocked_plan() {
         .clone();
     let json: Value = serde_json::from_slice(&output).unwrap();
 
-    assert_eq!(json["actions"][0]["action"], "block");
+    assert_eq!(json["actions"][0]["action"], "create");
     assert_eq!(json["actions"][0]["resource_id"], "subagents:reviewer");
-    assert!(json["diagnostics"][0]["message"]
+    assert_eq!(json["actions"][0]["path"], ".codex/agents/reviewer.toml");
+    assert!(json["actions"][0]["diff"]
         .as_str()
         .unwrap()
-        .contains("subagent rendering is blocked"));
+        .contains("Review carefully."));
 }
 
 #[test]
@@ -707,7 +708,7 @@ fn diff_named_subagent_only_reports_matching_resource() {
     let json: Value = serde_json::from_slice(&output).unwrap();
 
     assert_eq!(json["actions"].as_array().unwrap().len(), 1);
-    assert_eq!(json["actions"][0]["action"], "block");
+    assert_eq!(json["actions"][0]["action"], "create");
     assert_eq!(json["actions"][0]["resource_id"], "subagents:reviewer");
 }
 
@@ -741,7 +742,7 @@ fn diff_opencode_config_agent_returns_blocked_plan() {
 }
 
 #[test]
-fn sync_subagent_write_is_blocked_before_state_or_target_write() {
+fn sync_subagent_write_creates_target_and_state() {
     let dir = tempdir().unwrap();
     fs::create_dir_all(dir.path().join(".claude/agents")).unwrap();
     fs::write(
@@ -763,9 +764,38 @@ fn sync_subagent_write_is_blocked_before_state_or_target_write() {
             "--write",
         ])
         .assert()
+        .success();
+
+    assert!(dir.path().join(".codex/agents/reviewer.toml").exists());
+    assert!(dir.path().join(".agentsync/state.json").exists());
+}
+
+#[test]
+fn sync_subagent_with_tool_policy_is_blocked_before_state_or_target_write() {
+    let dir = tempdir().unwrap();
+    fs::create_dir_all(dir.path().join(".claude/agents")).unwrap();
+    fs::write(
+        dir.path().join(".claude/agents/reviewer.md"),
+        "---\nname: reviewer\ntools:\n  - Read\n---\nReview carefully.\n",
+    )
+    .unwrap();
+
+    Command::cargo_bin("agentsync")
+        .unwrap()
+        .current_dir(dir.path())
+        .args([
+            "sync",
+            "subagents",
+            "--from",
+            "claude",
+            "--to",
+            "codex",
+            "--write",
+        ])
+        .assert()
         .failure();
 
-    assert!(!dir.path().join(".codex/agents/reviewer.md").exists());
+    assert!(!dir.path().join(".codex/agents/reviewer.toml").exists());
     assert!(!dir.path().join(".agentsync/state.json").exists());
 }
 

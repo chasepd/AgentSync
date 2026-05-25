@@ -408,12 +408,22 @@ pub fn plan_filtered_with_options(
     let mut diagnostics = Vec::new();
     for source in sources {
         for target in targets {
-            if !matches!(source.kind, ResourceKind::RuleSet | ResourceKind::Skill) {
+            if !matches!(
+                source.kind,
+                ResourceKind::RuleSet | ResourceKind::Skill | ResourceKind::Subagent
+            ) {
                 diagnostics.extend(source.diagnostics.clone());
                 actions.push(block_action(source, *target, "non-portable"));
                 continue;
             }
             if source.kind == ResourceKind::Skill && source.support != SupportLevel::Portable {
+                diagnostics.extend(source.diagnostics.clone());
+                actions.push(block_action(source, *target, "non-portable"));
+                continue;
+            }
+            if source.kind == ResourceKind::Subagent
+                && (source.support == SupportLevel::Blocked || *target == Agent::CursorCli)
+            {
                 diagnostics.extend(source.diagnostics.clone());
                 actions.push(block_action(source, *target, "non-portable"));
                 continue;
@@ -1069,7 +1079,7 @@ mod tests {
     }
 
     #[test]
-    fn subagent_status_is_blocked_but_keeps_normalized_data() {
+    fn portable_subagent_status_is_untracked_and_keeps_normalized_data() {
         let dir = tempdir().unwrap();
         fs::create_dir_all(dir.path().join(".claude/agents")).unwrap();
         fs::write(
@@ -1086,16 +1096,16 @@ mod tests {
             .unwrap();
         let status = status_root(dir.path(), Scope::Project).unwrap();
 
-        assert_eq!(resource.support, SupportLevel::Blocked);
+        assert_eq!(resource.support, SupportLevel::Portable);
         assert_eq!(
             resource.subagent.as_ref().unwrap().description.as_deref(),
             Some("Review code")
         );
-        let blocked = status
+        let untracked = status
             .items
             .iter()
-            .any(|item| item.id == "subagents:reviewer" && item.state == DriftState::Blocked);
-        assert!(blocked);
+            .any(|item| item.id == "subagents:reviewer" && item.state == DriftState::Untracked);
+        assert!(untracked);
     }
 
     #[test]
@@ -1481,7 +1491,7 @@ mod tests {
     }
 
     #[test]
-    fn subagent_plan_is_blocked_and_not_rendered() {
+    fn portable_subagent_plan_renders_codex_toml() {
         let dir = tempdir().unwrap();
         fs::create_dir_all(dir.path().join(".claude/agents")).unwrap();
         fs::write(
@@ -1498,11 +1508,182 @@ mod tests {
         )
         .unwrap();
 
+        assert_eq!(report.actions[0].action, PlanActionKind::Create);
+        assert_eq!(report.actions[0].resource_id, "subagents:reviewer");
+        let rendered = report.actions[0].rendered.as_ref().unwrap();
+        assert_eq!(rendered.path, Path::new(".codex/agents/reviewer.toml"));
+        assert!(rendered.contents.contains("name = \"reviewer\""));
+        assert!(rendered.contents.contains("instructions = "));
+        assert!(rendered.contents.contains("Review carefully."));
+    }
+
+    #[test]
+    fn portable_subagent_plan_renders_markdown_targets() {
+        let dir = tempdir().unwrap();
+        fs::create_dir_all(dir.path().join(".claude/agents")).unwrap();
+        fs::write(
+            dir.path().join(".claude/agents/reviewer.md"),
+            "---\nname: reviewer\ndescription: Review code\nmodel: sonnet\n---\nReview carefully.\n",
+        )
+        .unwrap();
+
+        let opencode_report = plan(
+            dir.path(),
+            ResourceSelector::Subagents,
+            SourceAlias::Claude,
+            &[Agent::OpenCode],
+        )
+        .unwrap();
+
+        assert!(opencode_report.actions.iter().any(|action| {
+            action.action == PlanActionKind::Create
+                && action.path == Path::new(".opencode/agents/reviewer.md")
+                && action
+                    .rendered
+                    .as_ref()
+                    .unwrap()
+                    .contents
+                    .contains("model: sonnet\n")
+        }));
+        let dir = tempdir().unwrap();
+        fs::create_dir_all(dir.path().join(".opencode/agents")).unwrap();
+        fs::write(
+            dir.path().join(".opencode/agents/reviewer.md"),
+            "---\nname: reviewer\ndescription: Review code\nmodel: sonnet\n---\nReview carefully.\n",
+        )
+        .unwrap();
+        let claude_report = plan(
+            dir.path(),
+            ResourceSelector::Subagents,
+            SourceAlias::OpenCode,
+            &[Agent::Claude],
+        )
+        .unwrap();
+        assert!(claude_report.actions.iter().any(|action| {
+            action.action == PlanActionKind::Create
+                && action.path == Path::new(".claude/agents/reviewer.md")
+                && action
+                    .rendered
+                    .as_ref()
+                    .unwrap()
+                    .contents
+                    .ends_with("Review carefully.\n")
+        }));
+    }
+
+    #[test]
+    fn subagent_with_tool_policy_is_blocked_and_not_rendered() {
+        let dir = tempdir().unwrap();
+        fs::create_dir_all(dir.path().join(".claude/agents")).unwrap();
+        fs::write(
+            dir.path().join(".claude/agents/reviewer.md"),
+            "---\nname: reviewer\ntools:\n  - Read\n---\nReview carefully.\n",
+        )
+        .unwrap();
+
+        let report = plan(
+            dir.path(),
+            ResourceSelector::Subagents,
+            SourceAlias::Claude,
+            &[Agent::Codex],
+        )
+        .unwrap();
+
         assert_eq!(report.actions[0].action, PlanActionKind::Block);
         assert_eq!(report.actions[0].resource_id, "subagents:reviewer");
         assert!(report.actions[0].rendered.is_none());
+        assert!(report
+            .diagnostics
+            .iter()
+            .any(|diagnostic| diagnostic.message.contains("subagent.tools: blocked")));
         assert!(write_plan(dir.path(), &report).is_err());
         assert!(!dir.path().join(".agentsync/state.json").exists());
+    }
+
+    #[test]
+    fn subagent_with_native_only_field_is_blocked_and_not_rendered() {
+        let dir = tempdir().unwrap();
+        fs::create_dir_all(dir.path().join(".claude/agents")).unwrap();
+        fs::write(
+            dir.path().join(".claude/agents/reviewer.md"),
+            "---\nname: reviewer\nenabled: true\n---\nReview carefully.\n",
+        )
+        .unwrap();
+
+        let report = plan(
+            dir.path(),
+            ResourceSelector::Subagents,
+            SourceAlias::Claude,
+            &[Agent::Codex],
+        )
+        .unwrap();
+
+        assert_eq!(report.actions[0].action, PlanActionKind::Block);
+        assert!(report
+            .diagnostics
+            .iter()
+            .any(|diagnostic| diagnostic.message.contains("native-only fields")));
+        assert!(report.diagnostics.iter().any(|diagnostic| {
+            diagnostic
+                .message
+                .contains("subagent.native_extensions: blocked")
+        }));
+    }
+
+    #[test]
+    fn subagent_with_native_config_field_is_blocked_and_not_rendered() {
+        let dir = tempdir().unwrap();
+        fs::create_dir_all(dir.path().join(".claude/agents")).unwrap();
+        fs::write(
+            dir.path().join(".claude/agents/reviewer.md"),
+            "---\nname: reviewer\nconfig:\n  effort: high\n  sandbox: danger-full-access\n---\nReview carefully.\n",
+        )
+        .unwrap();
+
+        let report = plan(
+            dir.path(),
+            ResourceSelector::Subagents,
+            SourceAlias::Claude,
+            &[Agent::Codex],
+        )
+        .unwrap();
+
+        assert_eq!(report.actions[0].action, PlanActionKind::Block);
+        assert!(report
+            .diagnostics
+            .iter()
+            .any(|diagnostic| diagnostic.message.contains("native-only fields")));
+        assert!(report
+            .diagnostics
+            .iter()
+            .any(|diagnostic| diagnostic.message.contains("subagent.effort: partial")));
+        assert!(report.actions[0].rendered.is_none());
+    }
+
+    #[test]
+    fn subagent_with_path_separator_name_is_blocked_and_not_rendered() {
+        let dir = tempdir().unwrap();
+        fs::create_dir_all(dir.path().join(".claude/agents")).unwrap();
+        fs::write(
+            dir.path().join(".claude/agents/reviewer.md"),
+            "---\nname: ../escape\n---\nReview carefully.\n",
+        )
+        .unwrap();
+
+        let report = plan(
+            dir.path(),
+            ResourceSelector::Subagents,
+            SourceAlias::Claude,
+            &[Agent::Codex],
+        )
+        .unwrap();
+
+        assert_eq!(report.actions[0].action, PlanActionKind::Block);
+        assert!(report
+            .diagnostics
+            .iter()
+            .any(|diagnostic| diagnostic.message.contains("path separators")));
+        assert!(report.actions[0].rendered.is_none());
     }
 
     #[test]
