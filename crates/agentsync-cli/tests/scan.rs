@@ -389,4 +389,68 @@ fn scan_json_includes_permission_config_as_blocked() {
                 .unwrap()
                 .contains("\"permission\"")
     }));
+    let claude_permission = normalized
+        .iter()
+        .find(|resource| resource["id"] == "permissions:claude:.claude/settings.json")
+        .unwrap();
+    assert_eq!(
+        claude_permission["native_extensions"]["behavior.fields"]["permissions"]["allow"][0],
+        "Bash(git status)"
+    );
+    assert!(claude_permission["diagnostics"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|diagnostic| diagnostic["message"] == "permission.allow: blocked permission policy"));
+    let opencode_permission = normalized
+        .iter()
+        .find(|resource| resource["id"] == "permissions:opencode:opencode.jsonc")
+        .unwrap();
+    assert_eq!(
+        opencode_permission["native_extensions"]["behavior.fields"]["permission"]["edit"],
+        "ask"
+    );
+    assert!(opencode_permission["diagnostics"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|diagnostic| diagnostic["message"] == "permission.edit: blocked permission policy"));
+}
+
+#[test]
+fn scan_json_includes_hook_config_as_structured_blocked_behavior() {
+    let dir = tempdir().unwrap();
+    fs::create_dir_all(dir.path().join(".claude")).unwrap();
+    fs::write(
+        dir.path().join(".claude/settings.json"),
+        r#"{"hooks":{"PreToolUse":[{"matcher":"Bash","hooks":[{"type":"command","command":"echo hi"}]}]}}"#,
+    )
+    .unwrap();
+
+    let output = Command::cargo_bin("agentsync")
+        .unwrap()
+        .current_dir(dir.path())
+        .args(["scan", "--format", "json"])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let json: Value = serde_json::from_slice(&output).unwrap();
+    let hook = json["normalized"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|resource| resource["id"] == "hooks:claude:.claude/settings.json")
+        .unwrap();
+
+    assert_eq!(hook["kind"], "hook");
+    assert_eq!(hook["support"], "blocked");
+    assert!(hook["native_extensions"]["behavior.fields"]["hooks"]["PreToolUse"].is_array());
+    assert!(hook["diagnostics"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|diagnostic| diagnostic["message"]
+            == "hook.PreToolUse: blocked executable hook behavior"));
 }

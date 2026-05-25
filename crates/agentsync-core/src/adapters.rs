@@ -1354,6 +1354,7 @@ fn blocked_behavior(root: &Path, native: &NativeResource) -> NormalizedResource 
     }];
     match fs::read_to_string(root.join(&native.path)) {
         Ok(raw) => {
+            add_behavior_diagnostics(native, &raw, &mut native_extensions, &mut diagnostics);
             native_extensions.insert("native.raw".to_string(), Value::String(raw));
         }
         Err(error) => diagnostics.push(Diagnostic {
@@ -1380,6 +1381,103 @@ fn blocked_behavior(root: &Path, native: &NativeResource) -> NormalizedResource 
         native_extensions,
         diagnostics,
         support: SupportLevel::Blocked,
+    }
+}
+
+fn add_behavior_diagnostics(
+    native: &NativeResource,
+    raw: &str,
+    native_extensions: &mut BTreeMap<String, Value>,
+    diagnostics: &mut Vec<Diagnostic>,
+) {
+    let keys = match (native.agent, native.kind) {
+        (Agent::Claude, ResourceKind::Hook) => &["hooks"][..],
+        (Agent::Claude, ResourceKind::Permission) => &["permissions"][..],
+        (Agent::OpenCode, ResourceKind::Permission) => &["permission"][..],
+        _ => &[][..],
+    };
+    if keys.is_empty() {
+        return;
+    }
+    let Ok(value) = parse_jsonc_value(raw) else {
+        diagnostics.push(behavior_diagnostic(
+            native,
+            "behavior.config: blocked raw behavioral resource could not be parsed for structured diagnostics",
+        ));
+        return;
+    };
+
+    let fields = keys
+        .iter()
+        .filter_map(|key| {
+            value
+                .get(*key)
+                .map(|field| ((*key).to_string(), field.clone()))
+        })
+        .collect::<BTreeMap<_, _>>();
+    if fields.is_empty() {
+        return;
+    }
+
+    native_extensions.insert(
+        "behavior.kind".to_string(),
+        Value::String(native.kind.as_str().to_string()),
+    );
+    native_extensions.insert(
+        "behavior.fields".to_string(),
+        Value::Object(fields.clone().into_iter().collect()),
+    );
+    for (key, field) in fields {
+        add_behavior_field_diagnostics(native, &key, &field, diagnostics);
+    }
+}
+
+fn add_behavior_field_diagnostics(
+    native: &NativeResource,
+    key: &str,
+    field: &Value,
+    diagnostics: &mut Vec<Diagnostic>,
+) {
+    match native.kind {
+        ResourceKind::Hook => {
+            diagnostics.push(behavior_diagnostic(
+                native,
+                &format!("hook.{key}: blocked executable hook behavior"),
+            ));
+            if let Some(object) = field.as_object() {
+                for event in object.keys() {
+                    diagnostics.push(behavior_diagnostic(
+                        native,
+                        &format!("hook.{event}: blocked executable hook behavior"),
+                    ));
+                }
+            }
+        }
+        ResourceKind::Permission => {
+            diagnostics.push(behavior_diagnostic(
+                native,
+                &format!("permission.{key}: blocked permission policy"),
+            ));
+            if let Some(object) = field.as_object() {
+                for policy in object.keys() {
+                    diagnostics.push(behavior_diagnostic(
+                        native,
+                        &format!("permission.{policy}: blocked permission policy"),
+                    ));
+                }
+            }
+        }
+        _ => {}
+    }
+}
+
+fn behavior_diagnostic(native: &NativeResource, message: &str) -> Diagnostic {
+    Diagnostic {
+        severity: DiagnosticSeverity::Warning,
+        resource_id: Some(native.id.clone()),
+        resource_kind: Some(native.kind),
+        agent: Some(native.agent),
+        message: message.to_string(),
     }
 }
 
@@ -1879,6 +1977,21 @@ mod tests {
             resource.kind == ResourceKind::Hook
                 && resource.path == Path::new(".claude/settings.json")
         }));
+        let hook = resources
+            .iter()
+            .find(|resource| {
+                resource.kind == ResourceKind::Hook
+                    && resource.path == Path::new(".claude/settings.json")
+            })
+            .unwrap();
+        let resource = ClaudeAdapter.read(dir.path(), hook).unwrap();
+        assert_eq!(
+            resource.native_extensions["behavior.fields"]["hooks"]["PreToolUse"],
+            Value::Array(Vec::new())
+        );
+        assert!(resource.diagnostics.iter().any(|diagnostic| diagnostic
+            .message
+            .contains("hook.PreToolUse: blocked executable hook behavior")));
     }
 
     #[test]
@@ -1920,12 +2033,23 @@ mod tests {
 
         assert_eq!(resource.id, "permissions:claude:.claude/settings.json");
         assert_eq!(resource.support, SupportLevel::Blocked);
+        assert_eq!(
+            resource.native_extensions["behavior.kind"],
+            Value::String("permissions".to_string())
+        );
+        assert_eq!(
+            resource.native_extensions["behavior.fields"]["permissions"]["allow"][0],
+            Value::String("Bash(git status)".to_string())
+        );
         assert!(resource
             .native_extensions
             .get("native.raw")
             .and_then(Value::as_str)
             .unwrap()
             .contains("\"permissions\""));
+        assert!(resource.diagnostics.iter().any(|diagnostic| diagnostic
+            .message
+            .contains("permission.allow: blocked permission policy")));
     }
 
     #[test]
@@ -2239,12 +2363,23 @@ Body
 
         assert_eq!(resource.id, "permissions:opencode:opencode.jsonc");
         assert_eq!(resource.support, SupportLevel::Blocked);
+        assert_eq!(
+            resource.native_extensions["behavior.kind"],
+            Value::String("permissions".to_string())
+        );
+        assert_eq!(
+            resource.native_extensions["behavior.fields"]["permission"]["edit"],
+            Value::String("ask".to_string())
+        );
         assert!(resource
             .native_extensions
             .get("native.raw")
             .and_then(Value::as_str)
             .unwrap()
             .contains("\"permission\""));
+        assert!(resource.diagnostics.iter().any(|diagnostic| diagnostic
+            .message
+            .contains("permission.bash: blocked permission policy")));
     }
 
     #[test]
