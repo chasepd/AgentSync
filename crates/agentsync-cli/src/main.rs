@@ -1,8 +1,10 @@
+use agentsync_core::report::PlanReport;
 use agentsync_core::{
-    Agent, AgentSyncError, ConflictStrategy, PlanOptions, ResourceFilter, ResourceSelector, Scope,
-    SourceAlias,
+    Agent, AgentSyncError, ConflictStrategy, PlanConflictChoice, PlanOptions, ResourceFilter,
+    ResourceSelector, Scope, SourceAlias,
 };
 use clap::{Parser, Subcommand, ValueEnum};
+use std::io::{self, IsTerminal, Write};
 
 #[derive(Debug, Parser)]
 #[command(name = "agentsync")]
@@ -83,6 +85,9 @@ enum Command {
 
         #[arg(long)]
         no_overwrite: bool,
+
+        #[arg(long)]
+        interactive: bool,
 
         #[arg(long)]
         strategy: Option<CliConflictStrategy>,
@@ -303,20 +308,34 @@ fn main() -> Result<(), AgentSyncError> {
             dry_run,
             write,
             no_overwrite,
+            interactive,
             strategy,
             json,
             format,
         } => {
             let output = resolve_output_format(json, format);
+            if interactive && output == CliFormat::Json {
+                return Err(AgentSyncError::InvalidArgument(
+                    "sync --interactive cannot be used with JSON output".to_string(),
+                ));
+            }
+            if interactive && !io::stdin().is_terminal() {
+                return Err(AgentSyncError::InvalidArgument(
+                    "sync --interactive requires a TTY".to_string(),
+                ));
+            }
             let resource: ResourceSelector = resource.into();
             let (from, targets) = resolve_plan_args(resource, from, to)?;
-            let report = agentsync_core::plan_filtered_with_options(
+            let mut report = agentsync_core::plan_filtered_with_options(
                 std::env::current_dir()?,
                 resource_filter(resource, name),
                 from,
                 &targets,
                 plan_options(no_overwrite, strategy),
             )?;
+            if interactive {
+                resolve_interactive_conflicts(&mut report)?;
+            }
             if output == CliFormat::Json {
                 println!("{}", serde_json::to_string_pretty(&report)?);
             } else {
@@ -404,6 +423,57 @@ fn plan_options(no_overwrite: bool, strategy: Option<CliConflictStrategy>) -> Pl
     PlanOptions {
         no_overwrite,
         strategy: strategy.map(ConflictStrategy::from).unwrap_or_default(),
+    }
+}
+
+fn resolve_interactive_conflicts(report: &mut PlanReport) -> Result<(), AgentSyncError> {
+    let conflict_indexes = report
+        .actions
+        .iter()
+        .enumerate()
+        .filter_map(|(index, action)| {
+            agentsync_core::is_interactive_conflict(action).then_some(index)
+        })
+        .collect::<Vec<_>>();
+    for index in conflict_indexes {
+        let action = &report.actions[index];
+        eprintln!(
+            "Conflict: {} {} ({})",
+            action.resource_id,
+            action.path.display(),
+            action.reason
+        );
+        if let Some(diff) = &action.diff {
+            eprintln!("{diff}");
+        }
+        let choice = read_interactive_choice()?;
+        agentsync_core::resolve_plan_conflict(report, index, choice)?;
+    }
+    Ok(())
+}
+
+fn read_interactive_choice() -> Result<PlanConflictChoice, AgentSyncError> {
+    loop {
+        eprint!("Choose [s]ource, [t]arget, s[k]ip, [a]bort: ");
+        io::stderr().flush()?;
+        let mut input = String::new();
+        let bytes = io::stdin().read_line(&mut input)?;
+        if bytes == 0 {
+            return Err(AgentSyncError::InvalidArgument(
+                "interactive input ended before conflicts were resolved".to_string(),
+            ));
+        }
+        match input.trim().to_ascii_lowercase().as_str() {
+            "s" | "source" => return Ok(PlanConflictChoice::Source),
+            "t" | "target" => return Ok(PlanConflictChoice::Target),
+            "k" | "skip" => return Ok(PlanConflictChoice::Skip),
+            "a" | "abort" => {
+                return Err(AgentSyncError::InvalidArgument(
+                    "interactive sync aborted".to_string(),
+                ))
+            }
+            _ => eprintln!("Enter source, target, skip, or abort."),
+        }
     }
 }
 

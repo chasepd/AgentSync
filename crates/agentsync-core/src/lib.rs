@@ -25,6 +25,7 @@ pub use model::{
     Agent, ConflictStrategy, DiscoveryRoots, PlanOptions, ResourceFilter, ResourceKind,
     ResourceSelector, Scope, SourceAlias,
 };
+pub use report::PlanConflictChoice;
 
 pub fn scan(scope: Scope) -> Result<ScanReport, AgentSyncError> {
     scan_roots(default_discovery_roots()?, scope)
@@ -588,6 +589,47 @@ pub fn write_plan(root: impl AsRef<Path>, report: &PlanReport) -> Result<(), Age
         return Ok(());
     }
     save_state_from_plan(root, report)
+}
+
+pub fn resolve_plan_conflict(
+    report: &mut PlanReport,
+    action_index: usize,
+    choice: PlanConflictChoice,
+) -> Result<(), AgentSyncError> {
+    let action = report.actions.get_mut(action_index).ok_or_else(|| {
+        AgentSyncError::InvalidArgument(format!("plan action index {action_index} was not found"))
+    })?;
+    if !is_interactive_conflict(action) {
+        return Err(AgentSyncError::InvalidArgument(format!(
+            "plan action {} is not an interactive conflict",
+            action.path.display()
+        )));
+    }
+    match choice {
+        PlanConflictChoice::Source => {
+            action.action = PlanActionKind::Update;
+            action.reason = "interactive: keep source".to_string();
+        }
+        PlanConflictChoice::Target => {
+            action.action = PlanActionKind::Skip;
+            action.reason = "interactive: keep target".to_string();
+            action.rendered = None;
+            action.diff = None;
+        }
+        PlanConflictChoice::Skip => {
+            action.action = PlanActionKind::Skip;
+            action.reason = "interactive: skipped".to_string();
+            action.rendered = None;
+            action.diff = None;
+        }
+    }
+    Ok(())
+}
+
+pub fn is_interactive_conflict(action: &PlanAction) -> bool {
+    action.action == PlanActionKind::Block
+        && matches!(action.reason.as_str(), "target drifted" | "target exists")
+        && action.rendered.is_some()
 }
 
 fn select_sources<'a>(
@@ -1272,6 +1314,99 @@ mod tests {
         assert_eq!(report.actions[0].action, PlanActionKind::Block);
         assert_eq!(report.actions[0].reason, "target drifted");
         assert!(write_plan(dir.path(), &report).is_err());
+    }
+
+    #[test]
+    fn interactive_conflict_source_resolution_updates_with_backup() {
+        let dir = tempdir().unwrap();
+        fs::write(dir.path().join("AGENTS.md"), "repo rules\n").unwrap();
+        let report = plan(
+            dir.path(),
+            ResourceSelector::Rules,
+            SourceAlias::AgentsMd,
+            &[Agent::Claude],
+        )
+        .unwrap();
+        write_plan(dir.path(), &report).unwrap();
+        fs::write(dir.path().join("CLAUDE.md"), "local edit\n").unwrap();
+        fs::write(dir.path().join("AGENTS.md"), "new repo rules\n").unwrap();
+
+        let mut report = plan(
+            dir.path(),
+            ResourceSelector::Rules,
+            SourceAlias::AgentsMd,
+            &[Agent::Claude],
+        )
+        .unwrap();
+        resolve_plan_conflict(&mut report, 0, PlanConflictChoice::Source).unwrap();
+
+        assert_eq!(report.actions[0].action, PlanActionKind::Update);
+        assert!(!report.has_blocking_issues());
+        write_plan(dir.path(), &report).unwrap();
+        assert_eq!(
+            fs::read_to_string(dir.path().join("CLAUDE.md")).unwrap(),
+            "new repo rules\n"
+        );
+        assert_eq!(
+            fs::read_to_string(dir.path().join("CLAUDE.md.bak")).unwrap(),
+            "local edit\n"
+        );
+    }
+
+    #[test]
+    fn interactive_conflict_target_resolution_skips_write() {
+        let dir = tempdir().unwrap();
+        fs::write(dir.path().join("AGENTS.md"), "repo rules\n").unwrap();
+        let report = plan(
+            dir.path(),
+            ResourceSelector::Rules,
+            SourceAlias::AgentsMd,
+            &[Agent::Claude],
+        )
+        .unwrap();
+        write_plan(dir.path(), &report).unwrap();
+        fs::write(dir.path().join("CLAUDE.md"), "local edit\n").unwrap();
+        fs::write(dir.path().join("AGENTS.md"), "new repo rules\n").unwrap();
+
+        let mut report = plan(
+            dir.path(),
+            ResourceSelector::Rules,
+            SourceAlias::AgentsMd,
+            &[Agent::Claude],
+        )
+        .unwrap();
+        resolve_plan_conflict(&mut report, 0, PlanConflictChoice::Target).unwrap();
+
+        assert_eq!(report.actions[0].action, PlanActionKind::Skip);
+        assert_eq!(report.actions[0].reason, "interactive: keep target");
+        assert!(!report.has_blocking_issues());
+        write_plan(dir.path(), &report).unwrap();
+        assert_eq!(
+            fs::read_to_string(dir.path().join("CLAUDE.md")).unwrap(),
+            "local edit\n"
+        );
+    }
+
+    #[test]
+    fn interactive_resolution_rejects_non_conflict_block() {
+        let dir = tempdir().unwrap();
+        fs::create_dir_all(dir.path().join(".claude")).unwrap();
+        fs::write(
+            dir.path().join(".claude/settings.json"),
+            r#"{"hooks":{"PreToolUse":[]}}"#,
+        )
+        .unwrap();
+
+        let mut report = plan(
+            dir.path(),
+            ResourceSelector::Hooks,
+            SourceAlias::Claude,
+            &[Agent::Codex],
+        )
+        .unwrap();
+
+        assert!(resolve_plan_conflict(&mut report, 0, PlanConflictChoice::Source).is_err());
+        assert_eq!(report.actions[0].action, PlanActionKind::Block);
     }
 
     #[test]
