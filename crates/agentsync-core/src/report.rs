@@ -197,6 +197,14 @@ pub enum PlanActionKind {
     Block,
 }
 
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum PlanConflictChoice {
+    Source,
+    Target,
+    Skip,
+}
+
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct InitReport {
     pub path: PathBuf,

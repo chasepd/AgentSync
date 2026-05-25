@@ -203,6 +203,65 @@ fn sync_strategy_source_updates_drifted_target_with_backup() {
 }
 
 #[test]
+fn sync_interactive_fails_without_tty() {
+    let dir = tempdir().unwrap();
+    fs::write(dir.path().join("AGENTS.md"), "repo rules\n").unwrap();
+
+    let output = Command::cargo_bin("agentsync")
+        .unwrap()
+        .current_dir(dir.path())
+        .args([
+            "sync",
+            "rules",
+            "--from",
+            "agents-md",
+            "--to",
+            "claude",
+            "--interactive",
+            "--write",
+        ])
+        .assert()
+        .failure()
+        .get_output()
+        .stderr
+        .clone();
+    let stderr = String::from_utf8(output).unwrap();
+    assert!(stderr.contains("sync --interactive requires a TTY"));
+
+    assert!(!dir.path().join("CLAUDE.md").exists());
+}
+
+#[test]
+fn sync_interactive_json_fails_before_prompting() {
+    let dir = tempdir().unwrap();
+    fs::write(dir.path().join("AGENTS.md"), "repo rules\n").unwrap();
+
+    let output = Command::cargo_bin("agentsync")
+        .unwrap()
+        .current_dir(dir.path())
+        .args([
+            "sync",
+            "rules",
+            "--from",
+            "agents-md",
+            "--to",
+            "claude",
+            "--interactive",
+            "--format",
+            "json",
+        ])
+        .assert()
+        .failure()
+        .get_output()
+        .stderr
+        .clone();
+    let stderr = String::from_utf8(output).unwrap();
+    assert!(stderr.contains("sync --interactive cannot be used with JSON output"));
+
+    assert!(!dir.path().join("CLAUDE.md").exists());
+}
+
+#[test]
 fn diff_strategy_newest_blocks_when_target_is_newer() {
     let dir = tempdir().unwrap();
     let source = dir.path().join("AGENTS.md");
