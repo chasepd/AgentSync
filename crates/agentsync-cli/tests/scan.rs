@@ -7,8 +7,11 @@ use tempfile::tempdir;
 #[test]
 fn scan_uses_config_scope_when_scope_is_omitted() {
     let dir = tempdir().unwrap();
+    let user = tempdir().unwrap();
     fs::create_dir_all(dir.path().join(".agentsync")).unwrap();
+    fs::create_dir_all(user.path().join(".codex")).unwrap();
     fs::write(dir.path().join("AGENTS.md"), "repo rules\n").unwrap();
+    fs::write(user.path().join(".codex/AGENTS.md"), "user rules\n").unwrap();
     fs::write(
         dir.path().join(".agentsync/config.toml"),
         r#"schema_version = 1
@@ -22,6 +25,7 @@ scope = "all"
     let output = Command::cargo_bin("agentsync")
         .unwrap()
         .current_dir(dir.path())
+        .env("HOME", user.path())
         .args(["scan", "--json"])
         .assert()
         .success()
@@ -31,15 +35,16 @@ scope = "all"
     let json: Value = serde_json::from_slice(&output).unwrap();
 
     assert_eq!(json["scope"], "all");
-    assert!(json["diagnostics"][0]["message"]
-        .as_str()
-        .unwrap()
-        .contains("user scope scanning is not implemented yet"));
     assert!(json["resources"]
         .as_array()
         .unwrap()
         .iter()
         .any(|resource| resource["path"] == "AGENTS.md"));
+    assert!(json["resources"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|resource| { resource["path"] == ".codex/AGENTS.md" && resource["scope"] == "user" }));
 }
 
 #[test]

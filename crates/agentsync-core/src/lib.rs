@@ -22,54 +22,84 @@ use state::{load_state, save_state, StateFile, StateResource, StateTarget};
 
 pub use diagnostics::{AgentSyncError, Diagnostic, DiagnosticSeverity};
 pub use model::{
-    Agent, PlanOptions, ResourceFilter, ResourceKind, ResourceSelector, Scope, SourceAlias,
+    Agent, DiscoveryRoots, PlanOptions, ResourceFilter, ResourceKind, ResourceSelector, Scope,
+    SourceAlias,
 };
 
 pub fn scan(scope: Scope) -> Result<ScanReport, AgentSyncError> {
-    scan_root(std::env::current_dir()?, scope)
+    scan_roots(default_discovery_roots()?, scope)
 }
 
 pub fn scan_root(root: impl AsRef<Path>, scope: Scope) -> Result<ScanReport, AgentSyncError> {
-    let root = root.as_ref();
+    let root = root.as_ref().to_path_buf();
+    scan_roots(
+        DiscoveryRoots {
+            project: root.clone(),
+            user: root,
+        },
+        scope,
+    )
+}
+
+pub fn scan_roots(roots: DiscoveryRoots, scope: Scope) -> Result<ScanReport, AgentSyncError> {
     let mut report = ScanReport::empty(scope);
-    if matches!(scope, Scope::User | Scope::All) {
-        report.diagnostics.push(Diagnostic {
-            severity: DiagnosticSeverity::Info,
-            resource_id: None,
-            resource_kind: None,
-            agent: None,
-            message: "user scope scanning is not implemented yet".to_string(),
-        });
-    }
     if matches!(scope, Scope::Project | Scope::All) {
-        for adapter in built_in_adapters() {
-            report.capabilities.push(adapter.capabilities());
-            report
-                .diagnostics
-                .extend(adapter.validate(root, Scope::Project)?);
-            for native in adapter.discover(root, Scope::Project)? {
-                match adapter.read(root, &native) {
-                    Ok(resource) => report.normalized.push(resource),
-                    Err(error) => report.diagnostics.push(Diagnostic {
-                        severity: DiagnosticSeverity::Warning,
-                        resource_id: Some(native.id.clone()),
-                        resource_kind: Some(native.kind),
-                        agent: Some(native.agent),
-                        message: error.to_string(),
-                    }),
-                }
-                report.resources.push(native);
-            }
-        }
+        scan_scope_root(&roots.project, Scope::Project, &mut report)?;
+    }
+    if matches!(scope, Scope::User | Scope::All) {
+        scan_scope_root(&roots.user, Scope::User, &mut report)?;
     }
     report.resources.sort_by_key(resource_sort_key);
-    report.normalized.sort_by(|a, b| a.id.cmp(&b.id));
-    report.normalized.dedup_by(|a, b| a.id == b.id);
+    report
+        .normalized
+        .sort_by(|a, b| (a.scope, &a.id).cmp(&(b.scope, &b.id)));
+    report
+        .normalized
+        .dedup_by(|a, b| a.scope == b.scope && a.id == b.id);
     Ok(report)
 }
 
+fn default_discovery_roots() -> Result<DiscoveryRoots, AgentSyncError> {
+    let project = std::env::current_dir()?;
+    let user = std::env::var_os("HOME")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| project.clone());
+    Ok(DiscoveryRoots { project, user })
+}
+
+fn scan_scope_root(
+    root: &Path,
+    scope: Scope,
+    report: &mut ScanReport,
+) -> Result<(), AgentSyncError> {
+    for adapter in built_in_adapters() {
+        if !report
+            .capabilities
+            .iter()
+            .any(|capabilities| capabilities.agent == adapter.agent())
+        {
+            report.capabilities.push(adapter.capabilities());
+        }
+        report.diagnostics.extend(adapter.validate(root, scope)?);
+        for native in adapter.discover(root, scope)? {
+            match adapter.read(root, &native) {
+                Ok(resource) => report.normalized.push(resource),
+                Err(error) => report.diagnostics.push(Diagnostic {
+                    severity: DiagnosticSeverity::Warning,
+                    resource_id: Some(native.id.clone()),
+                    resource_kind: Some(native.kind),
+                    agent: Some(native.agent),
+                    message: error.to_string(),
+                }),
+            }
+            report.resources.push(native);
+        }
+    }
+    Ok(())
+}
+
 pub fn status(scope: Scope) -> Result<StatusReport, AgentSyncError> {
-    status_root(std::env::current_dir()?, scope)
+    status_roots(default_discovery_roots()?, scope)
 }
 
 pub fn doctor() -> Result<DoctorReport, AgentSyncError> {
@@ -207,7 +237,18 @@ hooks = false
 
 pub fn status_root(root: impl AsRef<Path>, scope: Scope) -> Result<StatusReport, AgentSyncError> {
     let root = root.as_ref();
-    let scan = scan_root(root, scope)?;
+    status_roots(
+        DiscoveryRoots {
+            project: root.to_path_buf(),
+            user: root.to_path_buf(),
+        },
+        scope,
+    )
+}
+
+pub fn status_roots(roots: DiscoveryRoots, scope: Scope) -> Result<StatusReport, AgentSyncError> {
+    let scan = scan_roots(roots.clone(), scope)?;
+    let root = &roots.project;
     let state = load_state(root)?;
     let mut items = Vec::new();
     for resource in &scan.normalized {
@@ -858,8 +899,13 @@ fn sha256_bytes(bytes: &[u8]) -> String {
     format!("{digest:x}")
 }
 
-fn resource_sort_key(resource: &NativeResource) -> (ResourceKind, PathBuf, Agent) {
-    (resource.kind, resource.path.clone(), resource.agent)
+fn resource_sort_key(resource: &NativeResource) -> (Scope, ResourceKind, PathBuf, Agent) {
+    (
+        resource.scope,
+        resource.kind,
+        resource.path.clone(),
+        resource.agent,
+    )
 }
 
 #[cfg(test)]
@@ -894,16 +940,104 @@ mod tests {
     }
 
     #[test]
-    fn user_scope_reports_not_implemented() {
+    fn user_scope_discovers_personal_config_from_injected_root() {
         let dir = tempdir().unwrap();
+        fs::create_dir_all(dir.path().join(".codex/skills/review")).unwrap();
+        fs::write(dir.path().join(".codex/AGENTS.md"), "codex user rules\n").unwrap();
+        fs::write(
+            dir.path().join(".codex/skills/review/SKILL.md"),
+            "---\nname: review\n---\nBody\n",
+        )
+        .unwrap();
+        fs::create_dir_all(dir.path().join(".claude/agents")).unwrap();
+        fs::write(
+            dir.path().join(".claude/agents/reviewer.md"),
+            "---\nname: reviewer\n---\nReview.\n",
+        )
+        .unwrap();
+        fs::create_dir_all(dir.path().join(".config/opencode/commands")).unwrap();
+        fs::write(
+            dir.path().join(".config/opencode/opencode.json"),
+            r#"{"permission":{"edit":"allow"}}"#,
+        )
+        .unwrap();
+        fs::write(
+            dir.path().join(".config/opencode/commands/deploy.md"),
+            "deploy\n",
+        )
+        .unwrap();
+
         let report = scan_root(dir.path(), Scope::User).unwrap();
 
-        assert!(report.resources.is_empty());
-        assert_eq!(report.diagnostics.len(), 1);
-        assert!(report.capabilities.is_empty());
-        assert!(report.diagnostics[0]
-            .message
-            .contains("user scope scanning is not implemented yet"));
+        assert!(report
+            .resources
+            .iter()
+            .all(|resource| resource.scope == Scope::User));
+        assert!(report
+            .resources
+            .iter()
+            .any(|resource| resource.path == Path::new(".codex/AGENTS.md")));
+        assert!(report
+            .normalized
+            .iter()
+            .any(|resource| resource.id == "skills:review" && resource.scope == Scope::User));
+        assert!(report.normalized.iter().any(|resource| {
+            resource.id == "subagents:reviewer" && resource.scope == Scope::User
+        }));
+        assert!(report.normalized.iter().any(|resource| {
+            resource.id == "permissions:opencode:.config/opencode/opencode.json"
+                && resource.scope == Scope::User
+        }));
+        assert!(report.normalized.iter().any(|resource| {
+            resource.id == "commands:opencode:.config/opencode/commands/deploy.md"
+                && resource.scope == Scope::User
+        }));
+    }
+
+    #[test]
+    fn all_scope_uses_separate_project_and_user_roots() {
+        let project = tempdir().unwrap();
+        let user = tempdir().unwrap();
+        fs::write(project.path().join("AGENTS.md"), "project rules\n").unwrap();
+        fs::create_dir_all(project.path().join(".codex/skills/review")).unwrap();
+        fs::write(
+            project.path().join(".codex/skills/review/SKILL.md"),
+            "---\nname: review\n---\nProject body\n",
+        )
+        .unwrap();
+        fs::create_dir_all(user.path().join(".codex")).unwrap();
+        fs::write(user.path().join(".codex/AGENTS.md"), "user rules\n").unwrap();
+        fs::create_dir_all(user.path().join(".codex/skills/review")).unwrap();
+        fs::write(
+            user.path().join(".codex/skills/review/SKILL.md"),
+            "---\nname: review\n---\nUser body\n",
+        )
+        .unwrap();
+
+        let report = scan_roots(
+            DiscoveryRoots {
+                project: project.path().to_path_buf(),
+                user: user.path().to_path_buf(),
+            },
+            Scope::All,
+        )
+        .unwrap();
+
+        assert!(report.resources.iter().any(|resource| {
+            resource.path == Path::new("AGENTS.md") && resource.scope == Scope::Project
+        }));
+        assert!(report.resources.iter().any(|resource| {
+            resource.path == Path::new(".codex/AGENTS.md") && resource.scope == Scope::User
+        }));
+        assert_eq!(
+            report
+                .normalized
+                .iter()
+                .filter(|resource| resource.id == "skills:review")
+                .count(),
+            2
+        );
+        assert_eq!(report.capabilities.len(), 4);
     }
 
     #[test]
@@ -970,7 +1104,7 @@ mod tests {
 
         let status = status_root(dir.path(), Scope::User).unwrap();
 
-        assert!(!status.diagnostics.is_empty());
+        assert!(status.diagnostics.is_empty());
         assert!(!status.has_blocking_issues());
     }
 

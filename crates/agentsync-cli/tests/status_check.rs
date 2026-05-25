@@ -116,7 +116,10 @@ fn status_format_json_outputs_structured_report() {
 #[test]
 fn status_uses_config_scope_when_scope_is_omitted() {
     let dir = tempdir().unwrap();
+    let user = tempdir().unwrap();
     fs::create_dir_all(dir.path().join(".agentsync")).unwrap();
+    fs::create_dir_all(user.path().join(".codex")).unwrap();
+    fs::write(user.path().join(".codex/AGENTS.md"), "user rules\n").unwrap();
     fs::write(
         dir.path().join(".agentsync/config.toml"),
         r#"schema_version = 1
@@ -130,6 +133,7 @@ scope = "user"
     let output = Command::cargo_bin("agentsync")
         .unwrap()
         .current_dir(dir.path())
+        .env("HOME", user.path())
         .args(["status", "--json", "--check"])
         .assert()
         .success()
@@ -139,10 +143,8 @@ scope = "user"
     let json: Value = serde_json::from_slice(&output).unwrap();
 
     assert_eq!(json["scope"], "user");
-    assert!(json["diagnostics"][0]["message"]
-        .as_str()
-        .unwrap()
-        .contains("user scope scanning is not implemented yet"));
+    assert_eq!(json["items"][0]["id"], "rules:codex:.codex/AGENTS.md");
+    assert_eq!(json["items"][0]["state"], "untracked");
 }
 
 #[test]
