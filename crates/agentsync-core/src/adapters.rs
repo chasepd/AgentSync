@@ -9,7 +9,7 @@ use walkdir::WalkDir;
 use crate::diagnostics::{AgentSyncError, Diagnostic, DiagnosticSeverity};
 use crate::model::{
     AdapterCapabilities, Agent, NativeResource, NormalizedResource, RenderedFile, ResourceKind,
-    RuleSet, Scope, Skill, SkillAsset, Subagent, SupportLevel,
+    RuleSet, Scope, Skill, SkillAsset, Subagent, SupportLevel, ToolPolicy,
 };
 
 pub trait AgentAdapter {
@@ -389,6 +389,14 @@ fn portable_capabilities(agent: Agent) -> AdapterCapabilities {
     fields.insert("skill.description".to_string(), SupportLevel::Portable);
     fields.insert("skill.body".to_string(), SupportLevel::Portable);
     fields.insert("skill.assets".to_string(), SupportLevel::Partial);
+    fields.insert("subagent.name".to_string(), SupportLevel::Portable);
+    fields.insert("subagent.description".to_string(), SupportLevel::Portable);
+    fields.insert("subagent.instructions".to_string(), SupportLevel::Portable);
+    fields.insert("subagent.model".to_string(), SupportLevel::Partial);
+    fields.insert("subagent.effort".to_string(), SupportLevel::Partial);
+    fields.insert("subagent.mode".to_string(), SupportLevel::Partial);
+    fields.insert("subagent.tools".to_string(), SupportLevel::Blocked);
+    fields.insert("subagent.permissions".to_string(), SupportLevel::Blocked);
     fields.insert("behavior.executable".to_string(), SupportLevel::Blocked);
 
     AdapterCapabilities {
@@ -869,6 +877,21 @@ fn normalize_subagent(
         &mut diagnostics,
         &mut support,
     );
+    let tools = normalize_tool_policy(&frontmatter);
+    let permissions = frontmatter_object(&frontmatter, &["permissions", "permission"]);
+    let model = frontmatter_string(&frontmatter, &["model"]);
+    let effort = frontmatter_string(&frontmatter, &["effort"])
+        .or_else(|| frontmatter_nested_string(&frontmatter, "config", "effort"));
+    let mode = frontmatter_string(&frontmatter, &["mode"]);
+    diagnostics.extend(subagent_field_diagnostics(
+        native,
+        &frontmatter,
+        &tools,
+        !permissions.is_empty(),
+        model.is_some(),
+        effort.is_some(),
+        mode.is_some(),
+    ));
 
     Ok(NormalizedResource {
         id: format!("subagents:{name}"),
@@ -881,13 +904,163 @@ fn normalize_subagent(
         subagent: Some(Subagent {
             name,
             description,
+            instructions: body.clone(),
             body,
+            model,
+            effort,
+            tools,
+            permissions,
+            mode,
             frontmatter,
         }),
         native_extensions,
         diagnostics,
         support,
     })
+}
+
+fn frontmatter_string(frontmatter: &BTreeMap<String, Value>, keys: &[&str]) -> Option<String> {
+    keys.iter()
+        .find_map(|key| frontmatter.get(*key).and_then(Value::as_str))
+        .map(ToOwned::to_owned)
+}
+
+fn frontmatter_nested_string(
+    frontmatter: &BTreeMap<String, Value>,
+    object_key: &str,
+    value_key: &str,
+) -> Option<String> {
+    frontmatter
+        .get(object_key)
+        .and_then(Value::as_object)
+        .and_then(|object| object.get(value_key))
+        .and_then(Value::as_str)
+        .map(ToOwned::to_owned)
+}
+
+fn frontmatter_object(
+    frontmatter: &BTreeMap<String, Value>,
+    keys: &[&str],
+) -> BTreeMap<String, Value> {
+    keys.iter()
+        .find_map(|key| frontmatter.get(*key).and_then(Value::as_object))
+        .map(|object| {
+            object
+                .iter()
+                .map(|(key, value)| (key.clone(), value.clone()))
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+fn normalize_tool_policy(frontmatter: &BTreeMap<String, Value>) -> ToolPolicy {
+    let Some(value) = frontmatter.get("tools") else {
+        return ToolPolicy::default();
+    };
+    if let Some(items) = value.as_array() {
+        return ToolPolicy {
+            allow: items
+                .iter()
+                .filter_map(Value::as_str)
+                .map(ToOwned::to_owned)
+                .collect(),
+            deny: Vec::new(),
+            native: Some(value.clone()),
+        };
+    }
+    let mut policy = ToolPolicy {
+        native: Some(value.clone()),
+        ..ToolPolicy::default()
+    };
+    if let Some(object) = value.as_object() {
+        for (key, value) in object {
+            match value {
+                Value::Bool(true) => policy.allow.push(key.clone()),
+                Value::Bool(false) => policy.deny.push(key.clone()),
+                Value::Array(items) if key == "allow" => policy.allow.extend(
+                    items
+                        .iter()
+                        .filter_map(Value::as_str)
+                        .map(ToOwned::to_owned),
+                ),
+                Value::Array(items) if key == "deny" => policy.deny.extend(
+                    items
+                        .iter()
+                        .filter_map(Value::as_str)
+                        .map(ToOwned::to_owned),
+                ),
+                _ => {}
+            }
+        }
+    }
+    policy.allow.sort();
+    policy.allow.dedup();
+    policy.deny.sort();
+    policy.deny.dedup();
+    policy
+}
+
+fn subagent_field_diagnostics(
+    native: &NativeResource,
+    frontmatter: &BTreeMap<String, Value>,
+    tools: &ToolPolicy,
+    has_permissions: bool,
+    has_model: bool,
+    has_effort: bool,
+    has_mode: bool,
+) -> Vec<Diagnostic> {
+    let mut diagnostics = vec![
+        subagent_field_diagnostic(native, "subagent.name: portable"),
+        subagent_field_diagnostic(native, "subagent.description: portable"),
+        subagent_field_diagnostic(native, "subagent.instructions: portable"),
+    ];
+    if has_model {
+        diagnostics.push(subagent_field_diagnostic(native, "subagent.model: partial"));
+    }
+    if has_effort {
+        diagnostics.push(subagent_field_diagnostic(
+            native,
+            "subagent.effort: partial",
+        ));
+    }
+    if has_mode {
+        diagnostics.push(subagent_field_diagnostic(native, "subagent.mode: partial"));
+    }
+    if !tools.allow.is_empty() || !tools.deny.is_empty() || tools.native.is_some() {
+        diagnostics.push(subagent_field_diagnostic(
+            native,
+            "subagent.tools: blocked until target-specific tool policy mapping is implemented",
+        ));
+    }
+    if has_permissions {
+        diagnostics.push(subagent_field_diagnostic(
+            native,
+            "subagent.permissions: blocked until permission policy mapping is implemented",
+        ));
+    }
+    for key in ["hooks", "mcp_servers", "mcp", "commands", "plugins"] {
+        if frontmatter.contains_key(key) {
+            diagnostics.push(subagent_field_diagnostic(
+                native,
+                &format!("subagent.{key}: blocked behavioral field"),
+            ));
+        }
+    }
+    diagnostics
+}
+
+fn subagent_field_diagnostic(native: &NativeResource, message: &str) -> Diagnostic {
+    Diagnostic {
+        severity: if message.contains("blocked") {
+            DiagnosticSeverity::Warning
+        } else {
+            DiagnosticSeverity::Info
+        },
+        resource_id: Some(native.id.clone()),
+        resource_kind: Some(ResourceKind::Subagent),
+        agent: Some(native.agent),
+        message: message.to_string(),
+    }
 }
 
 fn blocked_behavior(root: &Path, native: &NativeResource) -> NormalizedResource {
@@ -1093,6 +1266,18 @@ mod tests {
         assert_eq!(
             capabilities.resources.get(&ResourceKind::Skill),
             Some(&SupportLevel::Portable)
+        );
+        assert_eq!(
+            capabilities.fields.get("subagent.instructions"),
+            Some(&SupportLevel::Portable)
+        );
+        assert_eq!(
+            capabilities.fields.get("subagent.model"),
+            Some(&SupportLevel::Partial)
+        );
+        assert_eq!(
+            capabilities.fields.get("subagent.tools"),
+            Some(&SupportLevel::Blocked)
         );
         assert_eq!(
             capabilities.resources.get(&ResourceKind::Command),
@@ -1650,6 +1835,8 @@ model: sonnet
 tools:
   - Read
   - Grep
+permissions:
+  edit: allow
 config:
   effort: high
 enabled: true
@@ -1674,17 +1861,18 @@ Review carefully.
         assert_eq!(subagent.name, "reviewer");
         assert_eq!(subagent.description.as_deref(), Some("Review code"));
         assert_eq!(subagent.body, "Review carefully.\n");
+        assert_eq!(subagent.instructions, "Review carefully.\n");
+        assert_eq!(subagent.model.as_deref(), Some("sonnet"));
+        assert_eq!(subagent.effort.as_deref(), Some("high"));
+        assert_eq!(subagent.tools.allow, vec!["Read", "Grep"]);
+        assert!(subagent.tools.deny.is_empty());
         assert_eq!(
-            subagent.frontmatter.get("model").and_then(Value::as_str),
-            Some("sonnet")
+            subagent.permissions["edit"],
+            Value::String("allow".to_string())
         );
         assert_eq!(
             subagent.frontmatter["tools"][1],
             Value::String("Grep".to_string())
-        );
-        assert_eq!(
-            subagent.frontmatter["config"]["effort"],
-            Value::String("high".to_string())
         );
         assert_eq!(subagent.frontmatter["enabled"], Value::Bool(true));
         assert_eq!(
@@ -1695,6 +1883,64 @@ Review carefully.
             .diagnostics
             .iter()
             .any(|diagnostic| diagnostic.message.contains("subagent rendering is blocked")));
+        assert!(resource
+            .diagnostics
+            .iter()
+            .any(|diagnostic| diagnostic.message == "subagent.model: partial"));
+        assert!(resource.diagnostics.iter().any(|diagnostic| {
+            diagnostic.message == "subagent.model: partial"
+                && diagnostic.severity == DiagnosticSeverity::Info
+        }));
+        assert!(resource
+            .diagnostics
+            .iter()
+            .any(|diagnostic| diagnostic.message.contains("subagent.tools: blocked")));
+        assert!(resource
+            .diagnostics
+            .iter()
+            .any(|diagnostic| diagnostic.message.contains("subagent.permissions: blocked")));
+    }
+
+    #[test]
+    fn subagent_tool_object_normalizes_allow_deny_and_mode() {
+        let dir = tempdir().unwrap();
+        fs::create_dir_all(dir.path().join(".opencode/agents")).unwrap();
+        fs::write(
+            dir.path().join(".opencode/agents/operator.md"),
+            r#"---
+name: operator
+description: Operate carefully
+mode: primary
+tools:
+  read: true
+  write: false
+---
+Operate carefully.
+"#,
+        )
+        .unwrap();
+        let native = NativeResource {
+            id: "subagents:opencode:.opencode/agents/operator.md".to_string(),
+            agent: Agent::OpenCode,
+            kind: ResourceKind::Subagent,
+            scope: Scope::Project,
+            path: PathBuf::from(".opencode/agents/operator.md"),
+        };
+
+        let resource = OpenCodeAdapter.read(dir.path(), &native).unwrap();
+        let subagent = resource.subagent.unwrap();
+
+        assert_eq!(subagent.mode.as_deref(), Some("primary"));
+        assert_eq!(subagent.tools.allow, vec!["read"]);
+        assert_eq!(subagent.tools.deny, vec!["write"]);
+        assert!(resource
+            .diagnostics
+            .iter()
+            .any(|diagnostic| diagnostic.message == "subagent.mode: partial"));
+        assert!(resource
+            .diagnostics
+            .iter()
+            .any(|diagnostic| diagnostic.message.contains("subagent.tools: blocked")));
     }
 
     #[test]

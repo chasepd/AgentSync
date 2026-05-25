@@ -132,7 +132,26 @@ pub struct Subagent {
     pub name: String,
     pub description: Option<String>,
     pub body: String,
+    #[serde(default)]
+    pub instructions: String,
+    #[serde(default)]
+    pub model: Option<String>,
+    #[serde(default)]
+    pub effort: Option<String>,
+    #[serde(default)]
+    pub tools: ToolPolicy,
+    #[serde(default)]
+    pub permissions: BTreeMap<String, serde_json::Value>,
+    #[serde(default)]
+    pub mode: Option<String>,
     pub frontmatter: BTreeMap<String, serde_json::Value>,
+}
+
+#[derive(Clone, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
+pub struct ToolPolicy {
+    pub allow: Vec<String>,
+    pub deny: Vec<String>,
+    pub native: Option<serde_json::Value>,
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
