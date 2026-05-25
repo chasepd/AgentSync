@@ -377,7 +377,7 @@ fn portable_capabilities(agent: Agent) -> AdapterCapabilities {
     let mut resources = BTreeMap::new();
     resources.insert(ResourceKind::RuleSet, SupportLevel::Portable);
     resources.insert(ResourceKind::Skill, SupportLevel::Portable);
-    resources.insert(ResourceKind::Subagent, SupportLevel::Blocked);
+    resources.insert(ResourceKind::Subagent, SupportLevel::Partial);
     resources.insert(ResourceKind::Hook, SupportLevel::Blocked);
     resources.insert(ResourceKind::Command, SupportLevel::Blocked);
     resources.insert(ResourceKind::Plugin, SupportLevel::Blocked);
@@ -862,18 +862,18 @@ fn normalize_subagent(
         .get("description")
         .and_then(Value::as_str)
         .map(ToOwned::to_owned);
-    let mut diagnostics = vec![Diagnostic {
-        severity: DiagnosticSeverity::Warning,
-        resource_id: Some(native.id.clone()),
-        resource_kind: Some(ResourceKind::Subagent),
-        agent: Some(native.agent),
-        message: "subagent rendering is blocked for MVP sync".to_string(),
-    }];
-    let mut support = SupportLevel::Blocked;
-    let native_extensions = unsupported_frontmatter_extensions(
+    let mut diagnostics = Vec::new();
+    let mut support = SupportLevel::Portable;
+    if !is_safe_file_stem(&name) {
+        support = SupportLevel::Blocked;
+        diagnostics.push(subagent_field_diagnostic(
+            native,
+            "subagent.name: blocked because rendered file names may not contain path separators",
+        ));
+    }
+    let native_extensions = unsupported_subagent_frontmatter_extensions(
         native,
         &frontmatter,
-        &["name", "description"],
         &mut diagnostics,
         &mut support,
     );
@@ -892,6 +892,21 @@ fn normalize_subagent(
         effort.is_some(),
         mode.is_some(),
     ));
+    if subagent_has_blocking_diagnostics(&diagnostics) {
+        support = SupportLevel::Blocked;
+    } else if native_extensions.contains_key("frontmatter.native") {
+        support = SupportLevel::Blocked;
+        diagnostics.push(subagent_field_diagnostic(
+            native,
+            "subagent.native_extensions: blocked until native-only fields can be rendered safely",
+        ));
+    } else if support == SupportLevel::Portable
+        && diagnostics
+            .iter()
+            .any(|diagnostic| diagnostic.message.contains(": partial"))
+    {
+        support = SupportLevel::Partial;
+    }
 
     Ok(NormalizedResource {
         id: format!("subagents:{name}"),
@@ -951,6 +966,10 @@ fn frontmatter_object(
                 .collect()
         })
         .unwrap_or_default()
+}
+
+fn is_safe_file_stem(name: &str) -> bool {
+    !name.is_empty() && name != "." && name != ".." && !name.contains('/') && !name.contains('\\')
 }
 
 fn normalize_tool_policy(frontmatter: &BTreeMap<String, Value>) -> ToolPolicy {
@@ -1063,6 +1082,14 @@ fn subagent_field_diagnostic(native: &NativeResource, message: &str) -> Diagnost
     }
 }
 
+fn subagent_has_blocking_diagnostics(diagnostics: &[Diagnostic]) -> bool {
+    diagnostics.iter().any(|diagnostic| {
+        diagnostic.resource_kind == Some(ResourceKind::Subagent)
+            && diagnostic.severity == DiagnosticSeverity::Warning
+            && diagnostic.message.contains("blocked")
+    })
+}
+
 fn blocked_behavior(root: &Path, native: &NativeResource) -> NormalizedResource {
     let mut native_extensions = BTreeMap::new();
     let mut diagnostics = vec![Diagnostic {
@@ -1141,6 +1168,76 @@ fn unsupported_frontmatter_extensions(
     native_extensions
 }
 
+fn unsupported_subagent_frontmatter_extensions(
+    native: &NativeResource,
+    frontmatter: &BTreeMap<String, Value>,
+    diagnostics: &mut Vec<Diagnostic>,
+    support: &mut SupportLevel,
+) -> BTreeMap<String, Value> {
+    let supported_keys = [
+        "name",
+        "description",
+        "model",
+        "effort",
+        "tools",
+        "permissions",
+        "permission",
+        "mode",
+    ];
+    let mut unsupported = BTreeMap::new();
+    for (key, value) in frontmatter {
+        if key == "config" {
+            match value.as_object() {
+                Some(config) => {
+                    let unsupported_config = config
+                        .iter()
+                        .filter(|(key, _)| key.as_str() != "effort")
+                        .map(|(key, value)| (key.clone(), value.clone()))
+                        .collect::<BTreeMap<_, _>>();
+                    if !unsupported_config.is_empty() {
+                        unsupported.insert(
+                            key.clone(),
+                            Value::Object(unsupported_config.into_iter().collect()),
+                        );
+                    }
+                }
+                None => {
+                    unsupported.insert(key.clone(), value.clone());
+                }
+            }
+            continue;
+        }
+        if !supported_keys.contains(&key.as_str()) {
+            unsupported.insert(key.clone(), value.clone());
+        }
+    }
+    if unsupported.is_empty() {
+        return BTreeMap::new();
+    }
+
+    if *support == SupportLevel::Portable {
+        *support = SupportLevel::Partial;
+    }
+    diagnostics.push(Diagnostic {
+        severity: DiagnosticSeverity::Warning,
+        resource_id: Some(native.id.clone()),
+        resource_kind: Some(native.kind),
+        agent: Some(native.agent),
+        message: format!(
+            "{} frontmatter contains native-only fields that are preserved but not rendered: {}",
+            native.kind.as_str(),
+            unsupported.keys().cloned().collect::<Vec<_>>().join(", ")
+        ),
+    });
+
+    let mut native_extensions = BTreeMap::new();
+    native_extensions.insert(
+        "frontmatter.native".to_string(),
+        Value::Object(unsupported.into_iter().collect()),
+    );
+    native_extensions
+}
+
 fn split_frontmatter(raw: &str) -> Result<(BTreeMap<String, Value>, String), serde_yaml::Error> {
     if let Some(rest) = raw.strip_prefix("---\n") {
         if let Some(end) = rest.find("\n---\n") {
@@ -1164,8 +1261,9 @@ fn render_native(
     match resource.kind {
         ResourceKind::RuleSet => render_rules(resource, target),
         ResourceKind::Skill => render_skill(resource, target),
+        ResourceKind::Subagent => render_subagent(resource, target),
         _ => Err(AgentSyncError::InvalidArgument(
-            "only rules and skills can be rendered in the MVP".to_string(),
+            "only rules, skills, and portable subagents can be rendered".to_string(),
         )),
     }
 }
@@ -1248,6 +1346,104 @@ fn render_skill(
         });
     }
     Ok((files, Vec::new()))
+}
+
+fn render_subagent(
+    resource: &NormalizedResource,
+    target: Agent,
+) -> Result<(Vec<RenderedFile>, Vec<Diagnostic>), AgentSyncError> {
+    let subagent = resource
+        .subagent
+        .as_ref()
+        .ok_or_else(|| AgentSyncError::Adapter("missing subagent body".to_string()))?;
+    match target {
+        Agent::Claude => render_markdown_subagent(subagent, PathBuf::from(".claude/agents"), false),
+        Agent::OpenCode => {
+            render_markdown_subagent(subagent, PathBuf::from(".opencode/agents"), true)
+        }
+        Agent::Codex => render_codex_subagent(subagent),
+        Agent::CursorCli => Err(AgentSyncError::InvalidArgument(
+            "cursor subagent rendering is blocked until Cursor publishes stable file-format docs"
+                .to_string(),
+        )),
+    }
+}
+
+fn render_markdown_subagent(
+    subagent: &Subagent,
+    base: PathBuf,
+    include_mode: bool,
+) -> Result<(Vec<RenderedFile>, Vec<Diagnostic>), AgentSyncError> {
+    let mut frontmatter = BTreeMap::new();
+    frontmatter.insert("name".to_string(), Value::String(subagent.name.clone()));
+    if let Some(description) = &subagent.description {
+        frontmatter.insert(
+            "description".to_string(),
+            Value::String(description.clone()),
+        );
+    }
+    if let Some(model) = &subagent.model {
+        frontmatter.insert("model".to_string(), Value::String(model.clone()));
+    }
+    if include_mode {
+        if let Some(mode) = &subagent.mode {
+            frontmatter.insert("mode".to_string(), Value::String(mode.clone()));
+        }
+    }
+    let mut contents = String::new();
+    contents.push_str("---\n");
+    for line in serde_yaml::to_string(&frontmatter)
+        .map_err(|error| AgentSyncError::Adapter(error.to_string()))?
+        .lines()
+    {
+        if line != "---" {
+            contents.push_str(line);
+            contents.push('\n');
+        }
+    }
+    contents.push_str("---\n");
+    contents.push_str(&subagent.instructions);
+    Ok((
+        vec![RenderedFile {
+            path: base.join(format!("{}.md", subagent.name)),
+            contents,
+        }],
+        Vec::new(),
+    ))
+}
+
+fn render_codex_subagent(
+    subagent: &Subagent,
+) -> Result<(Vec<RenderedFile>, Vec<Diagnostic>), AgentSyncError> {
+    let mut table = toml::map::Map::new();
+    table.insert(
+        "name".to_string(),
+        toml::Value::String(subagent.name.clone()),
+    );
+    if let Some(description) = &subagent.description {
+        table.insert(
+            "description".to_string(),
+            toml::Value::String(description.clone()),
+        );
+    }
+    table.insert(
+        "instructions".to_string(),
+        toml::Value::String(subagent.instructions.clone()),
+    );
+    if let Some(model) = &subagent.model {
+        table.insert("model".to_string(), toml::Value::String(model.clone()));
+    }
+    if let Some(effort) = &subagent.effort {
+        table.insert("effort".to_string(), toml::Value::String(effort.clone()));
+    }
+    Ok((
+        vec![RenderedFile {
+            path: PathBuf::from(".codex/agents").join(format!("{}.toml", subagent.name)),
+            contents: toml::to_string_pretty(&toml::Value::Table(table))
+                .map_err(|error| AgentSyncError::Adapter(error.to_string()))?,
+        }],
+        Vec::new(),
+    ))
 }
 
 #[cfg(test)]
@@ -1876,13 +2072,9 @@ Review carefully.
         );
         assert_eq!(subagent.frontmatter["enabled"], Value::Bool(true));
         assert_eq!(
-            resource.native_extensions["frontmatter.native"]["tools"][0],
-            Value::String("Read".to_string())
+            resource.native_extensions["frontmatter.native"]["enabled"],
+            Value::Bool(true)
         );
-        assert!(resource
-            .diagnostics
-            .iter()
-            .any(|diagnostic| diagnostic.message.contains("subagent rendering is blocked")));
         assert!(resource
             .diagnostics
             .iter()
