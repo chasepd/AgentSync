@@ -57,23 +57,21 @@ impl AgentAdapter for CodexAdapter {
     }
 
     fn discover(&self, root: &Path, scope: Scope) -> Result<Vec<NativeResource>, AgentSyncError> {
-        if scope != Scope::Project {
-            return Ok(Vec::new());
-        }
         let mut resources = Vec::new();
+        let (rules, skills) = match scope {
+            Scope::Project => ("AGENTS.md", [".codex/skills", ".agents/skills"]),
+            Scope::User => (".codex/AGENTS.md", [".codex/skills", ".agents/skills"]),
+            Scope::All => return Ok(Vec::new()),
+        };
         push_if_exists(
             &mut resources,
             root,
             self.agent(),
             ResourceKind::RuleSet,
-            "AGENTS.md",
+            rules,
+            scope,
         );
-        discover_skill_dirs(
-            &mut resources,
-            root,
-            self.agent(),
-            [".codex/skills", ".agents/skills"],
-        );
+        discover_skill_dirs(&mut resources, root, self.agent(), skills, scope);
         Ok(resources)
     }
 
@@ -106,16 +104,17 @@ impl AgentAdapter for ClaudeAdapter {
     }
 
     fn discover(&self, root: &Path, scope: Scope) -> Result<Vec<NativeResource>, AgentSyncError> {
-        if scope != Scope::Project {
-            return Ok(Vec::new());
-        }
         let mut resources = Vec::new();
+        if scope == Scope::All {
+            return Ok(resources);
+        }
         push_if_exists(
             &mut resources,
             root,
             self.agent(),
             ResourceKind::RuleSet,
             "CLAUDE.md",
+            scope,
         );
         push_if_exists(
             &mut resources,
@@ -123,14 +122,22 @@ impl AgentAdapter for ClaudeAdapter {
             self.agent(),
             ResourceKind::RuleSet,
             ".claude/CLAUDE.md",
+            scope,
         );
-        discover_skill_dirs(&mut resources, root, self.agent(), [".claude/skills"]);
+        discover_skill_dirs(
+            &mut resources,
+            root,
+            self.agent(),
+            [".claude/skills"],
+            scope,
+        );
         discover_md_dir(
             &mut resources,
             root,
             self.agent(),
             ResourceKind::Subagent,
             ".claude/agents",
+            scope,
         );
         discover_json_key_files(
             &mut resources,
@@ -139,6 +146,7 @@ impl AgentAdapter for ClaudeAdapter {
             ResourceKind::Hook,
             [".claude/settings.json", ".claude/settings.local.json"],
             "hooks",
+            scope,
         );
         discover_json_key_files(
             &mut resources,
@@ -147,6 +155,7 @@ impl AgentAdapter for ClaudeAdapter {
             ResourceKind::Permission,
             [".claude/settings.json", ".claude/settings.local.json"],
             "permissions",
+            scope,
         );
         Ok(resources)
     }
@@ -190,6 +199,7 @@ impl AgentAdapter for CursorCliAdapter {
             self.agent(),
             ResourceKind::RuleSet,
             "AGENTS.md",
+            scope,
         );
         discover_md_dir(
             &mut resources,
@@ -197,8 +207,15 @@ impl AgentAdapter for CursorCliAdapter {
             self.agent(),
             ResourceKind::RuleSet,
             ".cursor/rules",
+            scope,
         );
-        discover_skill_dirs(&mut resources, root, self.agent(), [".cursor/skills"]);
+        discover_skill_dirs(
+            &mut resources,
+            root,
+            self.agent(),
+            [".cursor/skills"],
+            scope,
+        );
         Ok(resources)
     }
 
@@ -231,85 +248,105 @@ impl AgentAdapter for OpenCodeAdapter {
     }
 
     fn discover(&self, root: &Path, scope: Scope) -> Result<Vec<NativeResource>, AgentSyncError> {
-        if scope != Scope::Project {
-            return Ok(Vec::new());
-        }
         let mut resources = Vec::new();
+        let (rules, config_files, skill_dirs, agent_dir, command_dir, plugin_dir) = match scope {
+            Scope::Project => (
+                "AGENTS.md",
+                OPENCODE_CONFIG_FILES,
+                [".opencode/skills"],
+                ".opencode/agents",
+                ".opencode/commands",
+                ".opencode/plugins",
+            ),
+            Scope::User => (
+                ".config/opencode/AGENTS.md",
+                OPENCODE_USER_CONFIG_FILES,
+                [".config/opencode/skills"],
+                ".config/opencode/agents",
+                ".config/opencode/commands",
+                ".config/opencode/plugins",
+            ),
+            Scope::All => return Ok(resources),
+        };
         push_if_exists(
             &mut resources,
             root,
             self.agent(),
             ResourceKind::RuleSet,
-            "AGENTS.md",
+            rules,
+            scope,
         );
-        push_if_exists(
-            &mut resources,
-            root,
-            self.agent(),
-            ResourceKind::RuleSet,
-            "opencode.json",
-        );
-        push_if_exists(
-            &mut resources,
-            root,
-            self.agent(),
-            ResourceKind::RuleSet,
-            "opencode.jsonc",
-        );
-        discover_skill_dirs(&mut resources, root, self.agent(), [".opencode/skills"]);
+        for file in config_files {
+            push_if_exists(
+                &mut resources,
+                root,
+                self.agent(),
+                ResourceKind::RuleSet,
+                file,
+                scope,
+            );
+        }
+        discover_skill_dirs(&mut resources, root, self.agent(), skill_dirs, scope);
         discover_md_dir(
             &mut resources,
             root,
             self.agent(),
             ResourceKind::Subagent,
-            ".opencode/agents",
+            agent_dir,
+            scope,
         );
         discover_json_key_files(
             &mut resources,
             root,
             self.agent(),
             ResourceKind::Subagent,
-            OPENCODE_CONFIG_FILES,
+            config_files,
             "agent",
+            scope,
         );
         discover_md_dir(
             &mut resources,
             root,
             self.agent(),
             ResourceKind::Command,
-            ".opencode/commands",
+            command_dir,
+            scope,
         );
         discover_json_key_files(
             &mut resources,
             root,
             self.agent(),
             ResourceKind::Command,
-            OPENCODE_CONFIG_FILES,
+            config_files,
             "command",
+            scope,
         );
         discover_ext_dir(
             &mut resources,
             root,
             self.agent(),
             ResourceKind::Plugin,
-            ".opencode/plugins",
+            plugin_dir,
             &["cjs", "cts", "js", "mjs", "mts", "ts"],
+            scope,
         );
         discover_json_key_files(
             &mut resources,
             root,
             self.agent(),
             ResourceKind::Plugin,
-            OPENCODE_CONFIG_FILES,
+            config_files,
             "plugin",
+            scope,
         );
         discover_json_key_files(
             &mut resources,
             root,
             self.agent(),
             ResourceKind::Permission,
-            OPENCODE_CONFIG_FILES,
+            config_files,
             "permission",
+            scope,
         );
         Ok(resources)
     }
@@ -331,6 +368,10 @@ impl AgentAdapter for OpenCodeAdapter {
 }
 
 const OPENCODE_CONFIG_FILES: [&str; 2] = ["opencode.json", "opencode.jsonc"];
+const OPENCODE_USER_CONFIG_FILES: [&str; 2] = [
+    ".config/opencode/opencode.json",
+    ".config/opencode/opencode.jsonc",
+];
 
 fn portable_capabilities(agent: Agent) -> AdapterCapabilities {
     let mut resources = BTreeMap::new();
@@ -363,9 +404,10 @@ fn push_if_exists(
     agent: Agent,
     kind: ResourceKind,
     rel: &str,
+    scope: Scope,
 ) {
     if root.join(rel).is_file() {
-        resources.push(native(agent, kind, rel));
+        resources.push(native(agent, kind, rel, scope));
     }
 }
 
@@ -374,6 +416,7 @@ fn discover_skill_dirs<const N: usize>(
     root: &Path,
     agent: Agent,
     dirs: [&str; N],
+    scope: Scope,
 ) {
     for dir in dirs {
         if let Ok(entries) = fs::read_dir(root.join(dir)) {
@@ -381,7 +424,12 @@ fn discover_skill_dirs<const N: usize>(
                 let skill = entry.path().join("SKILL.md");
                 if skill.is_file() {
                     if let Ok(rel) = skill.strip_prefix(root) {
-                        resources.push(native(agent, ResourceKind::Skill, &rel.to_string_lossy()));
+                        resources.push(native(
+                            agent,
+                            ResourceKind::Skill,
+                            &rel.to_string_lossy(),
+                            scope,
+                        ));
                     }
                 }
             }
@@ -395,6 +443,7 @@ fn discover_md_dir(
     agent: Agent,
     kind: ResourceKind,
     dir: &str,
+    scope: Scope,
 ) {
     let abs = root.join(dir);
     if !abs.exists() {
@@ -405,7 +454,7 @@ fn discover_md_dir(
             let path = entry.path();
             if path.extension().and_then(|ext| ext.to_str()) == Some("md") {
                 if let Ok(rel) = path.strip_prefix(root) {
-                    resources.push(native(agent, kind, &rel.to_string_lossy()));
+                    resources.push(native(agent, kind, &rel.to_string_lossy(), scope));
                 }
             }
         }
@@ -419,6 +468,7 @@ fn discover_ext_dir(
     kind: ResourceKind,
     dir: &str,
     extensions: &[&str],
+    scope: Scope,
 ) {
     let abs = root.join(dir);
     if !abs.exists() {
@@ -433,7 +483,7 @@ fn discover_ext_dir(
                 .is_some_and(|ext| extensions.contains(&ext))
             {
                 if let Ok(rel) = path.strip_prefix(root) {
-                    resources.push(native(agent, kind, &rel.to_string_lossy()));
+                    resources.push(native(agent, kind, &rel.to_string_lossy(), scope));
                 }
             }
         }
@@ -447,6 +497,7 @@ fn discover_json_key_files<const N: usize>(
     kind: ResourceKind,
     files: [&str; N],
     key: &str,
+    scope: Scope,
 ) {
     for file in files {
         let abs = root.join(file);
@@ -460,12 +511,12 @@ fn discover_json_key_files<const N: usize>(
             continue;
         };
         if value.get(key).is_some() {
-            resources.push(native(agent, kind, file));
+            resources.push(native(agent, kind, file, scope));
         }
     }
 }
 
-fn native(agent: Agent, kind: ResourceKind, rel: &str) -> NativeResource {
+fn native(agent: Agent, kind: ResourceKind, rel: &str, scope: Scope) -> NativeResource {
     NativeResource {
         id: format!(
             "{}:{}:{}",
@@ -475,7 +526,7 @@ fn native(agent: Agent, kind: ResourceKind, rel: &str) -> NativeResource {
         ),
         agent,
         kind,
-        scope: Scope::Project,
+        scope,
         path: PathBuf::from(rel),
     }
 }
@@ -660,7 +711,9 @@ fn parse_jsonc_value(raw: &str) -> Result<Value, ParseError> {
 }
 
 fn is_opencode_config(path: &Path) -> bool {
-    path == Path::new("opencode.json") || path == Path::new("opencode.jsonc")
+    path.file_name()
+        .and_then(|name| name.to_str())
+        .is_some_and(|name| name == "opencode.json" || name == "opencode.jsonc")
 }
 
 fn opencode_instruction_diagnostic(native: &NativeResource, message: &str) -> Diagnostic {
