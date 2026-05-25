@@ -36,6 +36,42 @@ pub trait AgentAdapter {
     }
 }
 
+pub struct AdapterRegistry {
+    adapters: Vec<Box<dyn AgentAdapter>>,
+}
+
+impl AdapterRegistry {
+    pub fn empty() -> Self {
+        Self {
+            adapters: Vec::new(),
+        }
+    }
+
+    pub fn built_in() -> Self {
+        Self {
+            adapters: built_in_adapters(),
+        }
+    }
+
+    pub fn from_adapters(adapters: Vec<Box<dyn AgentAdapter>>) -> Self {
+        Self { adapters }
+    }
+
+    pub fn register(&mut self, adapter: Box<dyn AgentAdapter>) {
+        self.adapters.push(adapter);
+    }
+
+    pub fn adapters(&self) -> &[Box<dyn AgentAdapter>] {
+        &self.adapters
+    }
+}
+
+impl Default for AdapterRegistry {
+    fn default() -> Self {
+        Self::built_in()
+    }
+}
+
 pub fn built_in_adapters() -> Vec<Box<dyn AgentAdapter>> {
     vec![
         Box::new(CodexAdapter),

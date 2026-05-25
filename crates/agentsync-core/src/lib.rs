@@ -9,7 +9,6 @@ use std::collections::BTreeMap;
 use std::fs;
 use std::path::{Path, PathBuf};
 
-use adapters::built_in_adapters;
 use chrono::Utc;
 use config::{config_path, load_config};
 use model::{NativeResource, NormalizedResource, SupportLevel};
@@ -20,6 +19,7 @@ use report::{
 use sha2::{Digest, Sha256};
 use state::{load_state, save_state, StateFile, StateResource, StateTarget};
 
+pub use adapters::{AdapterRegistry, AgentAdapter};
 pub use diagnostics::{AgentSyncError, Diagnostic, DiagnosticSeverity};
 pub use model::{
     Agent, ConflictStrategy, DiscoveryRoots, PlanOptions, ResourceFilter, ResourceKind,
@@ -43,12 +43,20 @@ pub fn scan_root(root: impl AsRef<Path>, scope: Scope) -> Result<ScanReport, Age
 }
 
 pub fn scan_roots(roots: DiscoveryRoots, scope: Scope) -> Result<ScanReport, AgentSyncError> {
+    scan_roots_with_adapters(roots, scope, &AdapterRegistry::built_in())
+}
+
+pub fn scan_roots_with_adapters(
+    roots: DiscoveryRoots,
+    scope: Scope,
+    adapters: &AdapterRegistry,
+) -> Result<ScanReport, AgentSyncError> {
     let mut report = ScanReport::empty(scope);
     if matches!(scope, Scope::Project | Scope::All) {
-        scan_scope_root(&roots.project, Scope::Project, &mut report)?;
+        scan_scope_root(&roots.project, Scope::Project, &mut report, adapters)?;
     }
     if matches!(scope, Scope::User | Scope::All) {
-        scan_scope_root(&roots.user, Scope::User, &mut report)?;
+        scan_scope_root(&roots.user, Scope::User, &mut report, adapters)?;
     }
     report.resources.sort_by_key(resource_sort_key);
     report
@@ -72,8 +80,9 @@ fn scan_scope_root(
     root: &Path,
     scope: Scope,
     report: &mut ScanReport,
+    adapters: &AdapterRegistry,
 ) -> Result<(), AgentSyncError> {
-    for adapter in built_in_adapters() {
+    for adapter in adapters.adapters() {
         if !report
             .capabilities
             .iter()
@@ -411,8 +420,33 @@ pub fn plan_filtered_with_options(
     targets: &[Agent],
     options: PlanOptions,
 ) -> Result<PlanReport, AgentSyncError> {
+    plan_filtered_with_options_and_adapters(
+        root,
+        filter,
+        from,
+        targets,
+        options,
+        &AdapterRegistry::built_in(),
+    )
+}
+
+pub fn plan_filtered_with_options_and_adapters(
+    root: impl AsRef<Path>,
+    filter: ResourceFilter,
+    from: SourceAlias,
+    targets: &[Agent],
+    options: PlanOptions,
+    adapters: &AdapterRegistry,
+) -> Result<PlanReport, AgentSyncError> {
     let root = root.as_ref();
-    let scan = scan_root(root, Scope::Project)?;
+    let scan = scan_roots_with_adapters(
+        DiscoveryRoots {
+            project: root.to_path_buf(),
+            user: root.to_path_buf(),
+        },
+        Scope::Project,
+        adapters,
+    )?;
     let state = load_state(root)?;
     let sources = select_sources(&scan.normalized, &filter, from)?;
     let mut actions = Vec::new();
@@ -449,7 +483,7 @@ pub fn plan_filtered_with_options(
                 actions.push(block_action(source, *target, "non-portable"));
                 continue;
             }
-            let (rendered, render_diagnostics) = render_for_target(source, *target)?;
+            let (rendered, render_diagnostics) = render_for_target(source, *target, adapters)?;
             diagnostics.extend(render_diagnostics);
             for file in rendered {
                 let path = root.join(&file.path);
@@ -707,9 +741,10 @@ fn resource_matches_name(resource: &NormalizedResource, name: &str) -> bool {
 fn render_for_target(
     source: &NormalizedResource,
     target: Agent,
+    adapters: &AdapterRegistry,
 ) -> Result<(Vec<model::RenderedFile>, Vec<Diagnostic>), AgentSyncError> {
-    let adapters = built_in_adapters();
     let adapter = adapters
+        .adapters()
         .iter()
         .find(|adapter| adapter.agent() == target)
         .ok_or_else(|| {
@@ -1032,8 +1067,132 @@ fn resource_sort_key(resource: &NativeResource) -> (Scope, ResourceKind, PathBuf
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::model::{AdapterCapabilities, RenderedFile, RuleSet};
     use std::time::SystemTime;
     use tempfile::tempdir;
+
+    struct ExternalSourceAdapter;
+
+    impl AgentAdapter for ExternalSourceAdapter {
+        fn agent(&self) -> Agent {
+            Agent::Codex
+        }
+
+        fn capabilities(&self) -> AdapterCapabilities {
+            let mut resources = BTreeMap::new();
+            resources.insert(ResourceKind::RuleSet, SupportLevel::Portable);
+            AdapterCapabilities {
+                agent: Agent::Codex,
+                resources,
+                fields: BTreeMap::new(),
+            }
+        }
+
+        fn discover(
+            &self,
+            root: &Path,
+            scope: Scope,
+        ) -> Result<Vec<NativeResource>, AgentSyncError> {
+            if scope == Scope::Project && root.join("EXTERNAL.md").is_file() {
+                Ok(vec![NativeResource {
+                    id: "rules:external".to_string(),
+                    agent: Agent::Codex,
+                    kind: ResourceKind::RuleSet,
+                    scope,
+                    path: PathBuf::from("EXTERNAL.md"),
+                }])
+            } else {
+                Ok(Vec::new())
+            }
+        }
+
+        fn read(
+            &self,
+            root: &Path,
+            native: &NativeResource,
+        ) -> Result<NormalizedResource, AgentSyncError> {
+            Ok(NormalizedResource {
+                id: native.id.clone(),
+                kind: native.kind,
+                scope: native.scope,
+                source_agent: native.agent,
+                native_paths: vec![native.path.clone()],
+                rule_set: Some(RuleSet {
+                    body: fs::read_to_string(root.join(&native.path))?,
+                }),
+                skill: None,
+                subagent: None,
+                command: None,
+                native_extensions: BTreeMap::new(),
+                diagnostics: Vec::new(),
+                support: SupportLevel::Portable,
+            })
+        }
+
+        fn render(
+            &self,
+            _resource: &NormalizedResource,
+        ) -> Result<(Vec<RenderedFile>, Vec<Diagnostic>), AgentSyncError> {
+            Err(AgentSyncError::Adapter(
+                "external source adapter does not render".to_string(),
+            ))
+        }
+    }
+
+    struct ExternalTargetAdapter;
+
+    impl AgentAdapter for ExternalTargetAdapter {
+        fn agent(&self) -> Agent {
+            Agent::Claude
+        }
+
+        fn capabilities(&self) -> AdapterCapabilities {
+            let mut resources = BTreeMap::new();
+            resources.insert(ResourceKind::RuleSet, SupportLevel::Portable);
+            AdapterCapabilities {
+                agent: Agent::Claude,
+                resources,
+                fields: BTreeMap::new(),
+            }
+        }
+
+        fn discover(
+            &self,
+            _root: &Path,
+            _scope: Scope,
+        ) -> Result<Vec<NativeResource>, AgentSyncError> {
+            Ok(Vec::new())
+        }
+
+        fn read(
+            &self,
+            _root: &Path,
+            _native: &NativeResource,
+        ) -> Result<NormalizedResource, AgentSyncError> {
+            Err(AgentSyncError::Adapter(
+                "external target adapter does not read".to_string(),
+            ))
+        }
+
+        fn render(
+            &self,
+            resource: &NormalizedResource,
+        ) -> Result<(Vec<RenderedFile>, Vec<Diagnostic>), AgentSyncError> {
+            let body = resource
+                .rule_set
+                .as_ref()
+                .ok_or_else(|| AgentSyncError::Adapter("missing external rule body".to_string()))?
+                .body
+                .clone();
+            Ok((
+                vec![RenderedFile {
+                    path: PathBuf::from("EXTERNAL_TARGET.md"),
+                    contents: format!("external target\n{body}"),
+                }],
+                Vec::new(),
+            ))
+        }
+    }
 
     fn modified_time(path: &Path) -> SystemTime {
         fs::metadata(path).unwrap().modified().unwrap()
@@ -1074,6 +1233,59 @@ mod tests {
         let mut sorted = report.resources.clone();
         sorted.sort_by_key(resource_sort_key);
         assert_eq!(report.resources, sorted);
+    }
+
+    #[test]
+    fn external_adapter_registry_declares_capabilities_and_discovers_resources() {
+        let dir = tempdir().unwrap();
+        fs::write(dir.path().join("EXTERNAL.md"), "external rules\n").unwrap();
+        let registry = AdapterRegistry::from_adapters(vec![Box::new(ExternalSourceAdapter)]);
+
+        let report = scan_roots_with_adapters(
+            DiscoveryRoots {
+                project: dir.path().to_path_buf(),
+                user: dir.path().to_path_buf(),
+            },
+            Scope::Project,
+            &registry,
+        )
+        .unwrap();
+
+        assert_eq!(report.capabilities.len(), 1);
+        assert_eq!(report.capabilities[0].agent, Agent::Codex);
+        assert_eq!(report.resources[0].id, "rules:external");
+        assert_eq!(report.normalized[0].id, "rules:external");
+        assert_eq!(
+            report.normalized[0].rule_set.as_ref().unwrap().body,
+            "external rules\n"
+        );
+    }
+
+    #[test]
+    fn external_adapters_render_plan_actions_without_built_ins() {
+        let dir = tempdir().unwrap();
+        fs::write(dir.path().join("EXTERNAL.md"), "external rules\n").unwrap();
+        let registry = AdapterRegistry::from_adapters(vec![
+            Box::new(ExternalSourceAdapter),
+            Box::new(ExternalTargetAdapter),
+        ]);
+
+        let report = plan_filtered_with_options_and_adapters(
+            dir.path(),
+            ResourceFilter::all(ResourceSelector::Rules),
+            SourceAlias::Codex,
+            &[Agent::Claude],
+            PlanOptions::default(),
+            &registry,
+        )
+        .unwrap();
+
+        assert_eq!(report.actions.len(), 1);
+        assert_eq!(report.actions[0].action, PlanActionKind::Create);
+        assert_eq!(report.actions[0].resource_id, "rules:external");
+        let rendered = report.actions[0].rendered.as_ref().unwrap();
+        assert_eq!(rendered.path, Path::new("EXTERNAL_TARGET.md"));
+        assert_eq!(rendered.contents, "external target\nexternal rules\n");
     }
 
     #[test]
