@@ -21,7 +21,9 @@ use sha2::{Digest, Sha256};
 use state::{load_state, save_state, StateFile, StateResource, StateTarget};
 
 pub use diagnostics::{AgentSyncError, Diagnostic, DiagnosticSeverity};
-pub use model::{Agent, ResourceFilter, ResourceKind, ResourceSelector, Scope, SourceAlias};
+pub use model::{
+    Agent, PlanOptions, ResourceFilter, ResourceKind, ResourceSelector, Scope, SourceAlias,
+};
 
 pub fn scan(scope: Scope) -> Result<ScanReport, AgentSyncError> {
     scan_root(std::env::current_dir()?, scope)
@@ -347,6 +349,16 @@ pub fn plan_filtered(
     from: SourceAlias,
     targets: &[Agent],
 ) -> Result<PlanReport, AgentSyncError> {
+    plan_filtered_with_options(root, filter, from, targets, PlanOptions::default())
+}
+
+pub fn plan_filtered_with_options(
+    root: impl AsRef<Path>,
+    filter: ResourceFilter,
+    from: SourceAlias,
+    targets: &[Agent],
+    options: PlanOptions,
+) -> Result<PlanReport, AgentSyncError> {
     let root = root.as_ref();
     let scan = scan_root(root, Scope::Project)?;
     let state = load_state(root)?;
@@ -357,37 +369,40 @@ pub fn plan_filtered(
         for target in targets {
             if !matches!(source.kind, ResourceKind::RuleSet | ResourceKind::Skill) {
                 diagnostics.extend(source.diagnostics.clone());
-                actions.push(block_action(
-                    source,
-                    *target,
-                    "resource rendering is blocked for MVP sync",
-                ));
+                actions.push(block_action(source, *target, "non-portable"));
                 continue;
             }
             if source.kind == ResourceKind::Skill && source.support != SupportLevel::Portable {
                 diagnostics.extend(source.diagnostics.clone());
-                actions.push(block_action(
-                    source,
-                    *target,
-                    "skill contains non-portable assets or behavior",
-                ));
+                actions.push(block_action(source, *target, "non-portable"));
                 continue;
             }
             let (rendered, render_diagnostics) = render_for_target(source, *target)?;
             diagnostics.extend(render_diagnostics);
             for file in rendered {
                 let path = root.join(&file.path);
-                let action = if path.exists() {
+                let (action, reason) = if path.exists() {
                     let existing = fs::read_to_string(&path)?;
                     if existing == file.contents {
-                        PlanActionKind::Skip
+                        (
+                            PlanActionKind::Skip,
+                            format!("render {} from {}", target.as_str(), source.id),
+                        )
                     } else if target_drifted(root, &state, &file.path)? {
-                        PlanActionKind::Block
+                        (PlanActionKind::Block, "target drifted".to_string())
+                    } else if options.no_overwrite {
+                        (PlanActionKind::Block, "target exists".to_string())
                     } else {
-                        PlanActionKind::Update
+                        (
+                            PlanActionKind::Update,
+                            format!("render {} from {}", target.as_str(), source.id),
+                        )
                     }
                 } else {
-                    PlanActionKind::Create
+                    (
+                        PlanActionKind::Create,
+                        format!("render {} from {}", target.as_str(), source.id),
+                    )
                 };
                 let diff = matches!(
                     action,
@@ -398,11 +413,7 @@ pub fn plan_filtered(
                     action,
                     path: file.path.clone(),
                     resource_id: source.id.clone(),
-                    reason: if action == PlanActionKind::Block {
-                        "target has drifted since last sync".to_string()
-                    } else {
-                        format!("render {} from {}", target.as_str(), source.id)
-                    },
+                    reason,
                     rendered: Some(file),
                     diff,
                 });
@@ -1026,7 +1037,34 @@ mod tests {
         .unwrap();
 
         assert_eq!(report.actions[0].action, PlanActionKind::Block);
+        assert_eq!(report.actions[0].reason, "target drifted");
         assert!(write_plan(dir.path(), &report).is_err());
+    }
+
+    #[test]
+    fn no_overwrite_blocks_existing_untracked_target() {
+        let dir = tempdir().unwrap();
+        fs::write(dir.path().join("AGENTS.md"), "repo rules\n").unwrap();
+        fs::write(dir.path().join("CLAUDE.md"), "existing local rules\n").unwrap();
+
+        let report = plan_filtered_with_options(
+            dir.path(),
+            ResourceFilter::all(ResourceSelector::Rules),
+            SourceAlias::AgentsMd,
+            &[Agent::Claude],
+            PlanOptions { no_overwrite: true },
+        )
+        .unwrap();
+
+        assert_eq!(report.actions[0].action, PlanActionKind::Block);
+        assert_eq!(report.actions[0].reason, "target exists");
+        assert!(write_plan(dir.path(), &report).is_err());
+        assert_eq!(
+            fs::read_to_string(dir.path().join("CLAUDE.md")).unwrap(),
+            "existing local rules\n"
+        );
+        assert!(!dir.path().join("CLAUDE.md.bak").exists());
+        assert!(!dir.path().join(".agentsync/state.json").exists());
     }
 
     #[test]
@@ -1200,6 +1238,7 @@ mod tests {
         .unwrap();
 
         assert_eq!(report.actions[0].action, PlanActionKind::Block);
+        assert_eq!(report.actions[0].reason, "non-portable");
         assert!(report
             .diagnostics
             .iter()
@@ -1221,6 +1260,7 @@ mod tests {
             &[Agent::Claude],
         )
         .unwrap();
+        assert_eq!(report.actions[0].action, PlanActionKind::Update);
         write_plan(dir.path(), &report).unwrap();
         fs::write(dir.path().join("AGENTS.md"), "second\n").unwrap();
         let report = plan(
