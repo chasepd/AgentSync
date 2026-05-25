@@ -6,7 +6,7 @@ AgentSync scans your personal and project-level agent configuration, shows what 
 
 No more hand-copying `.claude/agents`, rewriting hooks by hand, or maintaining three almost-identical versions of the same repo instructions because every agent decided to be special.
 
-> Status: early project draft. Adapter behavior and exact file mappings may change as upstream agent CLIs evolve.
+> Status: v0.1 MVP. Rules, portable skills, prompt-only OpenCode commands, and supported subagents can be planned and synced; security-sensitive behavior is reported but blocked unless safe render semantics exist.
 
 ## Why
 
@@ -32,7 +32,7 @@ AgentSync can:
 - Preview diffs before writing changes.
 - Preserve native files instead of replacing them with a proprietary runtime.
 - Record sync metadata so future syncs know which files are linked.
-- Support one-way, two-way, or source-of-truth-based sync workflows.
+- Support explicit source-of-truth and conflict-resolution workflows.
 
 ## Supported resources
 
@@ -45,9 +45,9 @@ including the shared rules system in `.cursor/rules` and root-level
 | Resource | Claude Code | Codex CLI | Cursor CLI | OpenCode |
 | --- | --- | --- | --- | --- |
 | Rules / context | `CLAUDE.md`, `.claude/CLAUDE.md` | `AGENTS.md` | Cursor CLI rules, `AGENTS.md` where supported | `AGENTS.md`, `opencode.json` / `opencode.jsonc` instructions |
-| Subagents / custom agents | `.claude/agents/*.md` | Codex subagents | Cursor CLI subagents | `.opencode/agents/*.md`, `opencode.json` agent config |
+| Subagents / custom agents | `.claude/agents/*.md` | Codex subagents | blocked until Cursor publishes stable CLI file-format docs | `.opencode/agents/*.md`, `opencode.json` agent config |
 | Skills | `.claude/skills/*/SKILL.md` | Agent Skills / `SKILL.md` folders | Agent Skills / `SKILL.md` folders | `.opencode/skills/*/SKILL.md`, `.agents/skills`, Claude-compatible skills |
-| Hooks / lifecycle automation | Claude Code hooks in settings | Codex-compatible automation, plugins, and external hooks where supported | Cursor CLI hooks | OpenCode plugins and events |
+| Hooks / lifecycle automation | Claude Code hooks in settings | blocked behavioral resource | blocked behavioral resource | OpenCode plugins and events |
 | Commands | Claude skills / legacy commands | planned | planned | `.opencode/commands/*.md`, config commands |
 
 Support levels:
@@ -59,20 +59,13 @@ Support levels:
 
 ## Installation
 
-Package manager support is planned. AgentSync is designed as a Rust CLI with
-npm and Homebrew packages distributing the compiled binary.
+Package manager support is planned. For now, install the Rust CLI from source.
 
 ```bash
-# npm
-npm install -g agentsync
-
-# Homebrew
-brew install agentsync
-
 # From source
-git clone https://github.com/YOUR_ORG/agentsync.git
-cd agentsync
-cargo install --path .
+git clone https://github.com/chasepd/AgentSync.git
+cd AgentSync
+cargo install --path crates/agentsync-cli
 ```
 
 ## Quick start
@@ -458,7 +451,7 @@ agentsync status --check
 Example GitHub Action:
 
 ```yaml
-name: AgentSync
+name: AgentSync Drift
 
 on:
   pull_request:
@@ -470,7 +463,10 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - uses: YOUR_ORG/setup-agentsync@v1
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: 1.95.0
+      - run: cargo install --path crates/agentsync-cli
       - run: agentsync status --check
 ```
 
@@ -491,25 +487,29 @@ Hooks, plugins, commands, and executable skills can run code. AgentSync treats t
 
 AgentSync will:
 
-- Warn before generating executable hook or plugin code.
-- Preserve file permissions intentionally.
+- Report hooks, plugins, permissions, and executable behavior as blocked.
+- Preserve native fields where possible.
 - Refuse to auto-run generated scripts.
-- Mark generated code for review.
-- Provide `--no-hooks` for teams that only want rules, skills, and subagents.
+- Sync only resources with safe render semantics.
 
-Review generated hooks and plugins before enabling them.
+Review blocked behavioral diagnostics before recreating those behaviors by hand.
 
 ## Roadmap
 
-- [ ] Read-only scanner for Claude Code, Codex CLI, Cursor CLI, and OpenCode.
-- [ ] Rules/context sync.
-- [ ] Skills sync using `SKILL.md` plus portable text assets in the skill folder.
-- [ ] Claude Code subagent to Codex/OpenCode conversion.
-- [ ] OpenCode agent and command rendering.
-- [ ] Hook/plugin conversion with safety warnings.
-- [ ] Interactive drift resolver.
-- [ ] CI mode for detecting stale generated agent config.
-- [ ] Plugin system for adding new agent formats.
+- [x] Read-only scanner for Claude Code, Codex CLI, Cursor CLI, and OpenCode.
+- [x] Project and user scope discovery.
+- [x] Rules/context sync.
+- [x] Skills sync using `SKILL.md` plus portable text assets in the skill folder.
+- [x] Resource-targeted `diff` and `sync`.
+- [x] No-overwrite and conflict strategy safety controls.
+- [x] Claude Code subagent to Codex/OpenCode conversion for portable fields.
+- [x] OpenCode agent and prompt-only command rendering.
+- [x] Hook, plugin, permission, and executable-command diagnostics with unsafe behavior blocked.
+- [x] Interactive drift resolver.
+- [x] CI mode for detecting stale generated agent config.
+- [x] Adapter registry extension boundary for external adapters.
+- [ ] Packaged npm/Homebrew releases.
+- [ ] Full external adapter plugin loading with new agent identifiers.
 - [ ] Support for Gemini CLI, GitHub Copilot instructions, Aider conventions, Zed, and VS Code agent config.
 
 ## Contributing
