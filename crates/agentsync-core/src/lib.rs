@@ -22,8 +22,8 @@ use state::{load_state, save_state, StateFile, StateResource, StateTarget};
 
 pub use diagnostics::{AgentSyncError, Diagnostic, DiagnosticSeverity};
 pub use model::{
-    Agent, DiscoveryRoots, PlanOptions, ResourceFilter, ResourceKind, ResourceSelector, Scope,
-    SourceAlias,
+    Agent, ConflictStrategy, DiscoveryRoots, PlanOptions, ResourceFilter, ResourceKind,
+    ResourceSelector, Scope, SourceAlias,
 };
 
 pub fn scan(scope: Scope) -> Result<ScanReport, AgentSyncError> {
@@ -459,10 +459,10 @@ pub fn plan_filtered_with_options(
                             PlanActionKind::Skip,
                             format!("render {} from {}", target.as_str(), source.id),
                         )
-                    } else if target_drifted(root, &state, &file.path)? {
-                        (PlanActionKind::Block, "target drifted".to_string())
                     } else if options.no_overwrite {
                         (PlanActionKind::Block, "target exists".to_string())
+                    } else if target_drifted(root, &state, &file.path)? {
+                        resolve_target_drift(root, source, &file.path, &options)?
                     } else {
                         (
                             PlanActionKind::Update,
@@ -509,6 +509,51 @@ fn target_drifted(root: &Path, state: &StateFile, path: &Path) -> Result<bool, A
     };
     let current = fs::read(root.join(path))?;
     Ok(sha256_bytes(&current) != target.native_checksum)
+}
+
+fn resolve_target_drift(
+    root: &Path,
+    source: &NormalizedResource,
+    target_path: &Path,
+    options: &PlanOptions,
+) -> Result<(PlanActionKind, String), AgentSyncError> {
+    match options.strategy {
+        ConflictStrategy::Conservative => Ok((PlanActionKind::Block, "target drifted".to_string())),
+        ConflictStrategy::Source => Ok((
+            PlanActionKind::Update,
+            format!("render source from {}", source.id),
+        )),
+        ConflictStrategy::Newest => {
+            let source_mtime = source_modified_time(root, source)?;
+            let target_mtime = fs::metadata(root.join(target_path))?.modified()?;
+            if source_mtime > target_mtime {
+                Ok((
+                    PlanActionKind::Update,
+                    format!("source newer than target for {}", source.id),
+                ))
+            } else {
+                Ok((PlanActionKind::Block, "target drifted".to_string()))
+            }
+        }
+    }
+}
+
+fn source_modified_time(
+    root: &Path,
+    source: &NormalizedResource,
+) -> Result<std::time::SystemTime, AgentSyncError> {
+    let mut newest = std::time::SystemTime::UNIX_EPOCH;
+    for path in &source.native_paths {
+        let modified = fs::metadata(root.join(path))?.modified()?;
+        newest = newest.max(modified);
+    }
+    if let Some(skill) = &source.skill {
+        for path in &skill.asset_paths {
+            let modified = fs::metadata(root.join(path))?.modified()?;
+            newest = newest.max(modified);
+        }
+    }
+    Ok(newest)
 }
 
 pub fn write_plan(root: impl AsRef<Path>, report: &PlanReport) -> Result<(), AgentSyncError> {
@@ -945,7 +990,23 @@ fn resource_sort_key(resource: &NativeResource) -> (Scope, ResourceKind, PathBuf
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::time::SystemTime;
     use tempfile::tempdir;
+
+    fn modified_time(path: &Path) -> SystemTime {
+        fs::metadata(path).unwrap().modified().unwrap()
+    }
+
+    fn write_until_newer(path: &Path, contents: &str, older: SystemTime) {
+        for _ in 0..100 {
+            std::thread::sleep(std::time::Duration::from_millis(10));
+            fs::write(path, contents).unwrap();
+            if modified_time(path) > older {
+                return;
+            }
+        }
+        panic!("{} mtime did not advance", path.display());
+    }
 
     #[test]
     fn scan_discovers_rules_and_skills_deterministically() {
@@ -1214,6 +1275,221 @@ mod tests {
     }
 
     #[test]
+    fn changed_source_updates_without_conflict_strategy() {
+        let dir = tempdir().unwrap();
+        let source = dir.path().join("AGENTS.md");
+        fs::write(&source, "repo rules\n").unwrap();
+        let report = plan(
+            dir.path(),
+            ResourceSelector::Rules,
+            SourceAlias::AgentsMd,
+            &[Agent::Claude],
+        )
+        .unwrap();
+        write_plan(dir.path(), &report).unwrap();
+        write_until_newer(&source, "new repo rules\n", modified_time(&source));
+
+        let report = plan(
+            dir.path(),
+            ResourceSelector::Rules,
+            SourceAlias::AgentsMd,
+            &[Agent::Claude],
+        )
+        .unwrap();
+
+        assert_eq!(report.actions[0].action, PlanActionKind::Update);
+        assert_eq!(
+            fs::read_to_string(dir.path().join("CLAUDE.md")).unwrap(),
+            "repo rules\n"
+        );
+    }
+
+    #[test]
+    fn strategy_source_updates_drifted_target_and_writes_backup() {
+        let dir = tempdir().unwrap();
+        fs::write(dir.path().join("AGENTS.md"), "repo rules\n").unwrap();
+        let report = plan(
+            dir.path(),
+            ResourceSelector::Rules,
+            SourceAlias::AgentsMd,
+            &[Agent::Claude],
+        )
+        .unwrap();
+        write_plan(dir.path(), &report).unwrap();
+        fs::write(dir.path().join("CLAUDE.md"), "local edit\n").unwrap();
+        fs::write(dir.path().join("AGENTS.md"), "new repo rules\n").unwrap();
+
+        let report = plan_filtered_with_options(
+            dir.path(),
+            ResourceFilter::all(ResourceSelector::Rules),
+            SourceAlias::AgentsMd,
+            &[Agent::Claude],
+            PlanOptions {
+                strategy: ConflictStrategy::Source,
+                ..PlanOptions::default()
+            },
+        )
+        .unwrap();
+
+        assert_eq!(report.actions[0].action, PlanActionKind::Update);
+        write_plan(dir.path(), &report).unwrap();
+        assert_eq!(
+            fs::read_to_string(dir.path().join("CLAUDE.md")).unwrap(),
+            "new repo rules\n"
+        );
+        assert_eq!(
+            fs::read_to_string(dir.path().join("CLAUDE.md.bak")).unwrap(),
+            "local edit\n"
+        );
+    }
+
+    #[test]
+    fn strategy_newest_updates_when_source_is_newer_than_drifted_target() {
+        let dir = tempdir().unwrap();
+        let source = dir.path().join("AGENTS.md");
+        let target = dir.path().join("CLAUDE.md");
+        fs::write(&source, "repo rules\n").unwrap();
+        let report = plan(
+            dir.path(),
+            ResourceSelector::Rules,
+            SourceAlias::AgentsMd,
+            &[Agent::Claude],
+        )
+        .unwrap();
+        write_plan(dir.path(), &report).unwrap();
+        write_until_newer(&target, "local edit\n", modified_time(&source));
+        write_until_newer(&source, "new repo rules\n", modified_time(&target));
+
+        let report = plan_filtered_with_options(
+            dir.path(),
+            ResourceFilter::all(ResourceSelector::Rules),
+            SourceAlias::AgentsMd,
+            &[Agent::Claude],
+            PlanOptions {
+                strategy: ConflictStrategy::Newest,
+                ..PlanOptions::default()
+            },
+        )
+        .unwrap();
+
+        assert_eq!(report.actions[0].action, PlanActionKind::Update);
+        assert_eq!(
+            report.actions[0].reason,
+            "source newer than target for rules:agents-md"
+        );
+        write_plan(dir.path(), &report).unwrap();
+        assert_eq!(
+            fs::read_to_string(dir.path().join("CLAUDE.md.bak")).unwrap(),
+            "local edit\n"
+        );
+    }
+
+    #[test]
+    fn strategy_newest_blocks_when_target_is_newer_than_source() {
+        let dir = tempdir().unwrap();
+        let source = dir.path().join("AGENTS.md");
+        let target = dir.path().join("CLAUDE.md");
+        fs::write(&source, "repo rules\n").unwrap();
+        let report = plan(
+            dir.path(),
+            ResourceSelector::Rules,
+            SourceAlias::AgentsMd,
+            &[Agent::Claude],
+        )
+        .unwrap();
+        write_plan(dir.path(), &report).unwrap();
+        write_until_newer(&source, "new repo rules\n", modified_time(&target));
+        write_until_newer(&target, "local edit\n", modified_time(&source));
+
+        let report = plan_filtered_with_options(
+            dir.path(),
+            ResourceFilter::all(ResourceSelector::Rules),
+            SourceAlias::AgentsMd,
+            &[Agent::Claude],
+            PlanOptions {
+                strategy: ConflictStrategy::Newest,
+                ..PlanOptions::default()
+            },
+        )
+        .unwrap();
+
+        assert_eq!(report.actions[0].action, PlanActionKind::Block);
+        assert_eq!(report.actions[0].reason, "target drifted");
+        assert!(write_plan(dir.path(), &report).is_err());
+    }
+
+    #[test]
+    fn strategy_newest_creates_missing_target() {
+        let dir = tempdir().unwrap();
+        fs::write(dir.path().join("AGENTS.md"), "repo rules\n").unwrap();
+
+        let report = plan_filtered_with_options(
+            dir.path(),
+            ResourceFilter::all(ResourceSelector::Rules),
+            SourceAlias::AgentsMd,
+            &[Agent::Claude],
+            PlanOptions {
+                strategy: ConflictStrategy::Newest,
+                ..PlanOptions::default()
+            },
+        )
+        .unwrap();
+
+        assert_eq!(report.actions[0].action, PlanActionKind::Create);
+    }
+
+    #[test]
+    fn strategy_newest_considers_skill_asset_mtime() {
+        let dir = tempdir().unwrap();
+        let asset = dir.path().join(".claude/skills/review/assets/guide.md");
+        fs::create_dir_all(asset.parent().unwrap()).unwrap();
+        let skill_path = dir.path().join(".claude/skills/review/SKILL.md");
+        fs::write(&skill_path, "---\nname: review\n---\nReview body\n").unwrap();
+        fs::write(&asset, "asset body\n").unwrap();
+        write_until_newer(&asset, "new asset body\n", modified_time(&skill_path));
+        let resource = scan_root(dir.path(), Scope::Project)
+            .unwrap()
+            .normalized
+            .into_iter()
+            .find(|resource| {
+                resource.kind == ResourceKind::Skill && resource.source_agent == Agent::Claude
+            })
+            .unwrap();
+
+        assert_eq!(
+            source_modified_time(dir.path(), &resource).unwrap(),
+            modified_time(&asset)
+        );
+    }
+
+    #[test]
+    fn conflict_strategy_does_not_unblock_unsupported_behavior() {
+        let dir = tempdir().unwrap();
+        fs::create_dir_all(dir.path().join(".claude")).unwrap();
+        fs::write(
+            dir.path().join(".claude/settings.json"),
+            r#"{"hooks":{"PreToolUse":[]}}"#,
+        )
+        .unwrap();
+
+        let report = plan_filtered_with_options(
+            dir.path(),
+            ResourceFilter::all(ResourceSelector::Hooks),
+            SourceAlias::Claude,
+            &[Agent::Codex],
+            PlanOptions {
+                strategy: ConflictStrategy::Source,
+                ..PlanOptions::default()
+            },
+        )
+        .unwrap();
+
+        assert_eq!(report.actions[0].action, PlanActionKind::Block);
+        assert_eq!(report.actions[0].reason, "non-portable");
+        assert!(write_plan(dir.path(), &report).is_err());
+    }
+
+    #[test]
     fn no_overwrite_blocks_existing_untracked_target() {
         let dir = tempdir().unwrap();
         fs::write(dir.path().join("AGENTS.md"), "repo rules\n").unwrap();
@@ -1224,7 +1500,10 @@ mod tests {
             ResourceFilter::all(ResourceSelector::Rules),
             SourceAlias::AgentsMd,
             &[Agent::Claude],
-            PlanOptions { no_overwrite: true },
+            PlanOptions {
+                no_overwrite: true,
+                ..PlanOptions::default()
+            },
         )
         .unwrap();
 
@@ -1237,6 +1516,42 @@ mod tests {
         );
         assert!(!dir.path().join("CLAUDE.md.bak").exists());
         assert!(!dir.path().join(".agentsync/state.json").exists());
+    }
+
+    #[test]
+    fn no_overwrite_blocks_even_with_source_conflict_strategy() {
+        let dir = tempdir().unwrap();
+        fs::write(dir.path().join("AGENTS.md"), "repo rules\n").unwrap();
+        let report = plan(
+            dir.path(),
+            ResourceSelector::Rules,
+            SourceAlias::AgentsMd,
+            &[Agent::Claude],
+        )
+        .unwrap();
+        write_plan(dir.path(), &report).unwrap();
+        fs::write(dir.path().join("CLAUDE.md"), "local edit\n").unwrap();
+        fs::write(dir.path().join("AGENTS.md"), "new repo rules\n").unwrap();
+
+        let report = plan_filtered_with_options(
+            dir.path(),
+            ResourceFilter::all(ResourceSelector::Rules),
+            SourceAlias::AgentsMd,
+            &[Agent::Claude],
+            PlanOptions {
+                no_overwrite: true,
+                strategy: ConflictStrategy::Source,
+            },
+        )
+        .unwrap();
+
+        assert_eq!(report.actions[0].action, PlanActionKind::Block);
+        assert_eq!(report.actions[0].reason, "target exists");
+        assert!(write_plan(dir.path(), &report).is_err());
+        assert_eq!(
+            fs::read_to_string(dir.path().join("CLAUDE.md")).unwrap(),
+            "local edit\n"
+        );
     }
 
     #[test]
