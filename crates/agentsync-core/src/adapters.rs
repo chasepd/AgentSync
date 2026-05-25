@@ -683,7 +683,12 @@ fn normalize_skill(
 ) -> Result<NormalizedResource, AgentSyncError> {
     let path = root.join(&native.path);
     let raw = fs::read_to_string(&path)?;
-    let (frontmatter, body) = split_frontmatter(&raw);
+    let (frontmatter, body) = split_frontmatter(&raw).map_err(|error| {
+        AgentSyncError::Adapter(format!(
+            "failed to parse frontmatter in {}: {error}",
+            native.path.display()
+        ))
+    })?;
     let name = frontmatter
         .get("name")
         .and_then(Value::as_str)
@@ -704,6 +709,13 @@ fn normalize_skill(
     let mut assets = Vec::new();
     let mut diagnostics = Vec::new();
     let mut support = SupportLevel::Portable;
+    let native_extensions = unsupported_frontmatter_extensions(
+        native,
+        &frontmatter,
+        &["name", "description"],
+        &mut diagnostics,
+        &mut support,
+    );
     for entry in WalkDir::new(root.join(dir))
         .min_depth(1)
         .into_iter()
@@ -757,7 +769,7 @@ fn normalize_skill(
             frontmatter,
         }),
         subagent: None,
-        native_extensions: BTreeMap::new(),
+        native_extensions,
         diagnostics,
         support,
     })
@@ -769,7 +781,12 @@ fn normalize_subagent(
 ) -> Result<NormalizedResource, AgentSyncError> {
     let path = root.join(&native.path);
     let raw = fs::read_to_string(&path)?;
-    let (frontmatter, body) = split_frontmatter(&raw);
+    let (frontmatter, body) = split_frontmatter(&raw).map_err(|error| {
+        AgentSyncError::Adapter(format!(
+            "failed to parse frontmatter in {}: {error}",
+            native.path.display()
+        ))
+    })?;
     let name = frontmatter
         .get("name")
         .and_then(Value::as_str)
@@ -784,6 +801,22 @@ fn normalize_subagent(
         .get("description")
         .and_then(Value::as_str)
         .map(ToOwned::to_owned);
+    let mut diagnostics = vec![Diagnostic {
+        severity: DiagnosticSeverity::Warning,
+        resource_id: Some(native.id.clone()),
+        resource_kind: Some(ResourceKind::Subagent),
+        agent: Some(native.agent),
+        message: "subagent rendering is blocked for MVP sync".to_string(),
+    }];
+    let mut support = SupportLevel::Blocked;
+    let native_extensions = unsupported_frontmatter_extensions(
+        native,
+        &frontmatter,
+        &["name", "description"],
+        &mut diagnostics,
+        &mut support,
+    );
+
     Ok(NormalizedResource {
         id: format!("subagents:{name}"),
         kind: ResourceKind::Subagent,
@@ -798,15 +831,9 @@ fn normalize_subagent(
             body,
             frontmatter,
         }),
-        native_extensions: BTreeMap::new(),
-        diagnostics: vec![Diagnostic {
-            severity: DiagnosticSeverity::Warning,
-            resource_id: Some(native.id.clone()),
-            resource_kind: Some(ResourceKind::Subagent),
-            agent: Some(native.agent),
-            message: "subagent rendering is blocked for MVP sync".to_string(),
-        }],
-        support: SupportLevel::Blocked,
+        native_extensions,
+        diagnostics,
+        support,
     })
 }
 
@@ -849,24 +876,59 @@ fn blocked_behavior(root: &Path, native: &NativeResource) -> NormalizedResource 
     }
 }
 
-fn split_frontmatter(raw: &str) -> (BTreeMap<String, Value>, String) {
+fn unsupported_frontmatter_extensions(
+    native: &NativeResource,
+    frontmatter: &BTreeMap<String, Value>,
+    supported_keys: &[&str],
+    diagnostics: &mut Vec<Diagnostic>,
+    support: &mut SupportLevel,
+) -> BTreeMap<String, Value> {
+    let unsupported = frontmatter
+        .iter()
+        .filter(|(key, _)| !supported_keys.contains(&key.as_str()))
+        .map(|(key, value)| (key.clone(), value.clone()))
+        .collect::<BTreeMap<_, _>>();
+    if unsupported.is_empty() {
+        return BTreeMap::new();
+    }
+
+    if *support == SupportLevel::Portable {
+        *support = SupportLevel::Partial;
+    }
+    diagnostics.push(Diagnostic {
+        severity: DiagnosticSeverity::Warning,
+        resource_id: Some(native.id.clone()),
+        resource_kind: Some(native.kind),
+        agent: Some(native.agent),
+        message: format!(
+            "{} frontmatter contains native-only fields that are preserved but not rendered: {}",
+            native.kind.as_str(),
+            unsupported.keys().cloned().collect::<Vec<_>>().join(", ")
+        ),
+    });
+
+    let mut native_extensions = BTreeMap::new();
+    native_extensions.insert(
+        "frontmatter.native".to_string(),
+        Value::Object(unsupported.into_iter().collect()),
+    );
+    native_extensions
+}
+
+fn split_frontmatter(raw: &str) -> Result<(BTreeMap<String, Value>, String), serde_yaml::Error> {
     if let Some(rest) = raw.strip_prefix("---\n") {
         if let Some(end) = rest.find("\n---\n") {
-            let yaml_like = &rest[..end];
+            let yaml = &rest[..end];
             let body = rest[end + 5..].to_string();
-            let mut map = BTreeMap::new();
-            for line in yaml_like.lines() {
-                if let Some((key, value)) = line.split_once(':') {
-                    map.insert(
-                        key.trim().to_string(),
-                        Value::String(value.trim().trim_matches('"').to_string()),
-                    );
-                }
-            }
-            return (map, body);
+            let map = if yaml.trim().is_empty() {
+                BTreeMap::new()
+            } else {
+                serde_yaml::from_str::<BTreeMap<String, Value>>(yaml)?
+            };
+            return Ok((map, body));
         }
     }
-    (BTreeMap::new(), raw.to_string())
+    Ok((BTreeMap::new(), raw.to_string()))
 }
 
 fn render_native(
@@ -922,11 +984,22 @@ fn render_skill(
     let skill_dir = base.join(&skill.name);
     let path = skill_dir.join("SKILL.md");
     let mut contents = String::new();
-    if !skill.frontmatter.is_empty() {
+    let portable_frontmatter = skill
+        .frontmatter
+        .iter()
+        .filter(|(key, _)| matches!(key.as_str(), "name" | "description"))
+        .map(|(key, value)| (key.clone(), value.clone()))
+        .collect::<BTreeMap<_, _>>();
+    if !portable_frontmatter.is_empty() {
         contents.push_str("---\n");
-        for (key, value) in &skill.frontmatter {
-            let value = value.as_str().unwrap_or_default();
-            contents.push_str(&format!("{key}: {value}\n"));
+        for line in serde_yaml::to_string(&portable_frontmatter)
+            .map_err(|error| AgentSyncError::Adapter(error.to_string()))?
+            .lines()
+        {
+            if line != "---" {
+                contents.push_str(line);
+                contents.push('\n');
+            }
         }
         contents.push_str("---\n");
     }
@@ -1090,6 +1163,132 @@ mod tests {
         assert!(diagnostics.is_empty());
         assert_eq!(files[0].path, Path::new(".cursor/rules/agentsync.md"));
         assert_eq!(files[0].contents, "rules\n");
+    }
+
+    #[test]
+    fn skill_frontmatter_preserves_structured_native_fields_without_rendering_them() {
+        let dir = tempdir().unwrap();
+        fs::create_dir_all(dir.path().join(".claude/skills/review")).unwrap();
+        fs::write(
+            dir.path().join(".claude/skills/review/SKILL.md"),
+            r#"---
+name: review
+description: Review code
+tags:
+  - rust
+  - safety
+limits:
+  max_files: 3
+enabled: true
+---
+Body
+"#,
+        )
+        .unwrap();
+        let native = NativeResource {
+            id: "skills:claude:.claude/skills/review/SKILL.md".to_string(),
+            agent: Agent::Claude,
+            kind: ResourceKind::Skill,
+            scope: Scope::Project,
+            path: PathBuf::from(".claude/skills/review/SKILL.md"),
+        };
+
+        let resource = ClaudeAdapter.read(dir.path(), &native).unwrap();
+        let skill = resource.skill.as_ref().unwrap();
+
+        assert_eq!(resource.support, SupportLevel::Partial);
+        assert_eq!(
+            skill.frontmatter["tags"][0],
+            Value::String("rust".to_string())
+        );
+        assert_eq!(
+            skill.frontmatter["limits"]["max_files"],
+            Value::Number(3.into())
+        );
+        assert_eq!(skill.frontmatter["enabled"], Value::Bool(true));
+        assert_eq!(
+            resource.native_extensions["frontmatter.native"]["tags"][1],
+            Value::String("safety".to_string())
+        );
+        assert!(resource
+            .diagnostics
+            .iter()
+            .any(|diagnostic| diagnostic.message.contains("native-only fields")));
+
+        let (files, _) = CodexAdapter.render(&resource).unwrap();
+
+        assert!(files[0].contents.contains("name: review\n"));
+        assert!(files[0].contents.contains("description: Review code\n"));
+        assert!(!files[0].contents.contains("tags:"));
+        assert!(!files[0].contents.contains("limits:"));
+        assert!(!files[0].contents.contains("enabled:"));
+    }
+
+    #[test]
+    fn skill_binary_asset_marks_resource_partial() {
+        let dir = tempdir().unwrap();
+        fs::create_dir_all(dir.path().join(".claude/skills/review/assets")).unwrap();
+        fs::write(
+            dir.path().join(".claude/skills/review/SKILL.md"),
+            "---\nname: review\n---\nBody\n",
+        )
+        .unwrap();
+        fs::write(
+            dir.path().join(".claude/skills/review/assets/blob.bin"),
+            [0xff, 0xfe, 0xfd],
+        )
+        .unwrap();
+        let native = NativeResource {
+            id: "skills:claude:.claude/skills/review/SKILL.md".to_string(),
+            agent: Agent::Claude,
+            kind: ResourceKind::Skill,
+            scope: Scope::Project,
+            path: PathBuf::from(".claude/skills/review/SKILL.md"),
+        };
+
+        let resource = ClaudeAdapter.read(dir.path(), &native).unwrap();
+
+        assert_eq!(resource.support, SupportLevel::Partial);
+        assert!(resource.skill.unwrap().assets.is_empty());
+        assert!(resource
+            .diagnostics
+            .iter()
+            .any(|diagnostic| diagnostic.message.contains("not UTF-8")));
+    }
+
+    #[test]
+    fn skill_asset_path_traversal_is_rejected_at_render() {
+        let mut frontmatter = BTreeMap::new();
+        frontmatter.insert("name".to_string(), Value::String("review".to_string()));
+        let resource = NormalizedResource {
+            id: "skills:review".to_string(),
+            kind: ResourceKind::Skill,
+            scope: Scope::Project,
+            source_agent: Agent::Claude,
+            native_paths: vec![PathBuf::from(".claude/skills/review/SKILL.md")],
+            rule_set: None,
+            skill: Some(Skill {
+                name: "review".to_string(),
+                description: None,
+                body: "Body\n".to_string(),
+                asset_paths: vec![PathBuf::from("../escape.md")],
+                assets: vec![SkillAsset {
+                    relative_path: PathBuf::from("../escape.md"),
+                    contents: "escape\n".to_string(),
+                }],
+                frontmatter,
+            }),
+            subagent: None,
+            native_extensions: BTreeMap::new(),
+            diagnostics: Vec::new(),
+            support: SupportLevel::Portable,
+        };
+
+        let error = CodexAdapter.render(&resource).unwrap_err();
+
+        assert!(error
+            .to_string()
+            .contains("skill asset path may not escape skill directory"));
     }
 
     #[test]
@@ -1391,7 +1590,19 @@ mod tests {
         fs::create_dir_all(dir.path().join(".claude/agents")).unwrap();
         fs::write(
             dir.path().join(".claude/agents/reviewer.md"),
-            "---\nname: reviewer\ndescription: Review code\nmodel: sonnet\n---\nReview carefully.\n",
+            r#"---
+name: reviewer
+description: Review code
+model: sonnet
+tools:
+  - Read
+  - Grep
+config:
+  effort: high
+enabled: true
+---
+Review carefully.
+"#,
         )
         .unwrap();
         let native = NativeResource {
@@ -1413,6 +1624,19 @@ mod tests {
         assert_eq!(
             subagent.frontmatter.get("model").and_then(Value::as_str),
             Some("sonnet")
+        );
+        assert_eq!(
+            subagent.frontmatter["tools"][1],
+            Value::String("Grep".to_string())
+        );
+        assert_eq!(
+            subagent.frontmatter["config"]["effort"],
+            Value::String("high".to_string())
+        );
+        assert_eq!(subagent.frontmatter["enabled"], Value::Bool(true));
+        assert_eq!(
+            resource.native_extensions["frontmatter.native"]["tools"][0],
+            Value::String("Read".to_string())
         );
         assert!(resource
             .diagnostics
