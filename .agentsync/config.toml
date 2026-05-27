@@ -1,0 +1,13 @@
+schema_version = 1
+
+[defaults]
+scope = "project"
+source = "all"
+targets = ["codex", "claude", "cursor", "opencode"]
+
+[sync]
+rules = true
+skills = true
+subagents = false
+commands = false
+hooks = false
