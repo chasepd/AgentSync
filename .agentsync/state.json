@@ -28,11 +28,11 @@
     {
       "resource_id": "skills:code-review",
       "kind": "skill",
-      "source_agent": "codex",
+      "source_agent": "opencode",
       "source_paths": [
-        ".codex/skills/code-review/SKILL.md"
+        ".opencode/skills/code-review/SKILL.md"
       ],
-      "source_checksum": "c434e15f01b55042c5655f76c501211750cf18eedc658fc23582b628d6d0df53",
+      "source_checksum": "967ea3aece5fa6938866e6ab0fce275e0789bfcabd51d62b306cca952e27eba6",
       "targets": [
         {
           "agent": "claude",
@@ -43,6 +43,11 @@
           "agent": "claude",
           "path": ".claude/skills/code-review/code-reviewer.md",
           "native_checksum": "f298d744922bf5b97d1b2647fa62763a5d5adc09d59e45d122cfbb51d8f46b14"
+        },
+        {
+          "agent": "codex",
+          "path": ".codex/skills/code-review/SKILL.md",
+          "native_checksum": "0a8a31f5a4dc388151ecac7493ee913cde55200efd7dea0ddbd429075da0ef61"
         },
         {
           "agent": "cursor",
@@ -67,7 +72,7 @@
       ],
       "diagnostics": [],
       "native_extensions": {},
-      "last_synced_at": "2026-05-27T16:01:53.669343317+00:00"
+      "last_synced_at": "2026-05-27T16:05:22.296084072+00:00"
     }
   ]
 }
