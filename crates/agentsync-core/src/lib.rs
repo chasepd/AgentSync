@@ -286,6 +286,11 @@ pub fn status_root(root: impl AsRef<Path>, scope: Scope) -> Result<StatusReport,
 
 pub fn status_roots(roots: DiscoveryRoots, scope: Scope) -> Result<StatusReport, AgentSyncError> {
     let scan = scan_roots(roots.clone(), scope)?;
+    let source_scan = scan_roots_with_adapters_preserving_sources(
+        roots.clone(),
+        scope,
+        &AdapterRegistry::built_in(),
+    )?;
     let root = &roots.project;
     let state = load_state(root)?;
     let mut items = Vec::new();
@@ -300,64 +305,68 @@ pub fn status_roots(roots: DiscoveryRoots, scope: Scope) -> Result<StatusReport,
             });
             continue;
         }
-        let checksum = normalized_checksum(resource)?;
-        match state
+        let Some(entry) = state
             .resources
             .iter()
             .find(|entry| entry.resource_id == resource.id)
-        {
-            Some(entry) if entry.source_checksum != checksum => items.push(StatusItem {
-                id: resource.id.clone(),
-                kind: resource.kind,
-                state: DriftState::ChangedSource,
-                message: "source normalized content changed".to_string(),
-                suggested_command: suggested_diff_command(resource, entry),
-            }),
-            Some(entry) => {
-                let missing = entry
-                    .targets
-                    .iter()
-                    .find(|target| !root.join(&target.path).exists());
-                if let Some(target) = missing {
-                    items.push(StatusItem {
-                        id: resource.id.clone(),
-                        kind: resource.kind,
-                        state: DriftState::MissingTarget,
-                        message: format!("missing {}", target.path.display()),
-                        suggested_command: suggested_diff_command(resource, entry),
-                    });
-                    continue;
-                }
-                let stale = entry.targets.iter().find(|target| {
-                    fs::read(root.join(&target.path))
-                        .map(|bytes| sha256_bytes(&bytes) != target.native_checksum)
-                        .unwrap_or(true)
-                });
-                if let Some(target) = stale {
-                    items.push(StatusItem {
-                        id: resource.id.clone(),
-                        kind: resource.kind,
-                        state: DriftState::StaleTarget,
-                        message: format!("target drifted {}", target.path.display()),
-                        suggested_command: suggested_diff_command(resource, entry),
-                    });
-                } else {
-                    items.push(StatusItem {
-                        id: resource.id.clone(),
-                        kind: resource.kind,
-                        state: DriftState::Clean,
-                        message: "tracked and clean".to_string(),
-                        suggested_command: None,
-                    });
-                }
-            }
-            None => items.push(StatusItem {
+        else {
+            items.push(StatusItem {
                 id: resource.id.clone(),
                 kind: resource.kind,
                 state: DriftState::Untracked,
                 message: "not present in .agentsync/state.json".to_string(),
                 suggested_command: None,
-            }),
+            });
+            continue;
+        };
+
+        let source = status_source_resource(&source_scan.normalized, resource, entry)?;
+        if entry.source_checksum != normalized_checksum(source)? {
+            items.push(StatusItem {
+                id: resource.id.clone(),
+                kind: resource.kind,
+                state: DriftState::ChangedSource,
+                message: "source normalized content changed".to_string(),
+                suggested_command: suggested_diff_command(source, entry),
+            });
+            continue;
+        }
+
+        let missing = entry
+            .targets
+            .iter()
+            .find(|target| !root.join(&target.path).exists());
+        if let Some(target) = missing {
+            items.push(StatusItem {
+                id: resource.id.clone(),
+                kind: resource.kind,
+                state: DriftState::MissingTarget,
+                message: format!("missing {}", target.path.display()),
+                suggested_command: suggested_diff_command(source, entry),
+            });
+            continue;
+        }
+        let stale = entry.targets.iter().find(|target| {
+            fs::read(root.join(&target.path))
+                .map(|bytes| sha256_bytes(&bytes) != target.native_checksum)
+                .unwrap_or(true)
+        });
+        if let Some(target) = stale {
+            items.push(StatusItem {
+                id: resource.id.clone(),
+                kind: resource.kind,
+                state: DriftState::StaleTarget,
+                message: format!("target drifted {}", target.path.display()),
+                suggested_command: suggested_diff_command(source, entry),
+            });
+        } else {
+            items.push(StatusItem {
+                id: resource.id.clone(),
+                kind: resource.kind,
+                state: DriftState::Clean,
+                message: "tracked and clean".to_string(),
+                suggested_command: None,
+            });
         }
     }
     Ok(StatusReport {
@@ -365,6 +374,31 @@ pub fn status_roots(roots: DiscoveryRoots, scope: Scope) -> Result<StatusReport,
         items,
         diagnostics: scan.diagnostics,
     })
+}
+
+fn status_source_resource<'a>(
+    resources: &'a [NormalizedResource],
+    resource: &'a NormalizedResource,
+    entry: &StateResource,
+) -> Result<&'a NormalizedResource, AgentSyncError> {
+    if entry.source_paths.is_empty() {
+        return Ok(resource);
+    }
+    resources
+        .iter()
+        .find(|candidate| {
+            candidate.id == entry.resource_id
+                && entry
+                    .source_agent
+                    .is_none_or(|source_agent| candidate.source_agent == source_agent)
+                && candidate.native_paths == entry.source_paths
+        })
+        .ok_or_else(|| {
+            AgentSyncError::InvalidArgument(format!(
+                "tracked source for {} was not found",
+                entry.resource_id
+            ))
+        })
 }
 
 fn suggested_diff_command(resource: &NormalizedResource, entry: &StateResource) -> Option<String> {
