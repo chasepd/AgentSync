@@ -1,6 +1,6 @@
 ---
-description: Use when completing tasks, implementing major features, or before merging to verify AgentSync changes meet requirements
 name: code-review
+description: Use when completing tasks, implementing major features, or before merging to verify AgentSync changes meet requirements
 ---
 
 # Requesting Code Review
