@@ -5,6 +5,13 @@
 - Start new work from `main`.
 - Preserve user edits. Do not revert files you did not change unless explicitly asked.
 - Use git worktrees for parallel agent work when changes may overlap.
+- When work is completed, open a PR unless the user explicitly asks not to.
+
+## Issue Privacy
+
+- When opening, creating, or editing issues, do not include personal details.
+- Preserve user privacy while still giving enough detail to communicate the intent of the issue.
+- Scrub and genericize personal data before including it as sample data.
 
 ## Validation
 
