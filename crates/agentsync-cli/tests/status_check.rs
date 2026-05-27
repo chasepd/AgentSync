@@ -219,6 +219,33 @@ fn status_check_reports_changed_source() {
     );
 }
 
+#[test]
+fn status_check_uses_tracked_source_when_duplicate_logical_skill_exists() {
+    let dir = tempdir().unwrap();
+    fs::create_dir_all(dir.path().join(".opencode/skills/review")).unwrap();
+    fs::write(
+        dir.path().join(".opencode/skills/review/SKILL.md"),
+        "---\nname: review\n---\nReview body\n",
+    )
+    .unwrap();
+
+    Command::cargo_bin("agentsync")
+        .unwrap()
+        .current_dir(dir.path())
+        .args([
+            "sync", "skills", "--from", "opencode", "--to", "codex", "--write",
+        ])
+        .assert()
+        .success();
+
+    Command::cargo_bin("agentsync")
+        .unwrap()
+        .current_dir(dir.path())
+        .args(["status", "--check"])
+        .assert()
+        .success();
+}
+
 fn sync_rules_to_claude(dir: &std::path::Path) {
     Command::cargo_bin("agentsync")
         .unwrap()
