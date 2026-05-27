@@ -195,6 +195,14 @@ pub enum ResourceSelector {
 }
 
 impl ResourceSelector {
+    pub const ALL: [Self; 5] = [
+        Self::Rules,
+        Self::Skills,
+        Self::Subagents,
+        Self::Commands,
+        Self::Hooks,
+    ];
+
     pub fn as_str(self) -> &'static str {
         match self {
             Self::Rules => "rules",

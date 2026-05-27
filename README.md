@@ -99,22 +99,22 @@ Hooks
   run-format-after-edit          claude, opencode
 ```
 
-Sync Claude Code configuration into Codex and OpenCode formats:
+Sync every matching resource kind from the selected source:
 
 ```bash
-agentsync sync --from claude --to codex,opencode
+agentsync sync --all --from claude --to codex,opencode
 ```
 
 Preview changes first:
 
 ```bash
-agentsync sync --from claude --to codex,opencode --dry-run
+agentsync sync --all --from claude --to codex,opencode --dry-run
 ```
 
 Write the generated files:
 
 ```bash
-agentsync sync --from claude --to codex,opencode --write
+agentsync sync --all --from claude --to codex,opencode --write
 ```
 
 Check for drift later:
@@ -143,8 +143,8 @@ Suggested action:
 
 ```bash
 agentsync scan
-agentsync sync --from claude --to codex,opencode --dry-run
-agentsync sync --from claude --to codex,opencode --write
+agentsync sync --all --from claude --to codex,opencode --dry-run
+agentsync sync --all --from claude --to codex,opencode --write
 ```
 
 ### Keep AGENTS.md as the source of truth
@@ -248,25 +248,25 @@ When multiple formats change, AgentSync can reconcile them with an explicit stra
 Use one format as source of truth:
 
 ```bash
-agentsync sync --from claude --to codex,opencode --write
+agentsync sync --all --from claude --to codex,opencode --write
 ```
 
 Prefer the newest changed file:
 
 ```bash
-agentsync sync --strategy newest --write
+agentsync sync --all --strategy newest --write
 ```
 
 Open an interactive conflict resolver:
 
 ```bash
-agentsync sync --interactive
+agentsync sync --all --interactive
 ```
 
 Refuse to overwrite drifted files:
 
 ```bash
-agentsync sync --no-overwrite
+agentsync sync --all --no-overwrite
 ```
 
 AgentSync should be boringly safe by default:
@@ -314,6 +314,7 @@ agentsync scan
 agentsync status
 agentsync diff rules
 agentsync sync rules --write
+agentsync sync --all --write
 ```
 
 `[sync]` toggles gate config-driven planning for that resource kind, so setting
@@ -349,7 +350,7 @@ WARN block-env-reads: target hook requires plugin wrapper generation.
 agentsync scan
 agentsync status
 agentsync diff
-agentsync sync
+agentsync sync --all
 agentsync init [--write]
 agentsync doctor
 ```
@@ -392,10 +393,11 @@ agentsync diff subagent security-reviewer --from claude --to opencode
 Generate or update target formats.
 
 ```bash
-agentsync sync --from claude --to codex,opencode --dry-run
-agentsync sync --from claude --to codex,opencode --write
+agentsync sync --all --from claude --to codex,opencode --dry-run
+agentsync sync --all --from claude --to codex,opencode --write
 agentsync sync rules --from claude --to codex --format json
 agentsync sync skill pr-review --from claude --to codex --write
+agentsync sync --all --write
 ```
 
 ### `doctor`
@@ -448,7 +450,8 @@ Use AgentSync in CI to prevent drift:
 agentsync status --check
 ```
 
-Example GitHub Action:
+This repository includes `.github/workflows/agentsync-drift.yml`. Example
+GitHub Action:
 
 ```yaml
 name: AgentSync Drift
