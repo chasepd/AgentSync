@@ -473,6 +473,47 @@ jobs:
       - run: agentsync status --check
 ```
 
+### Reusable auto-sync PR workflow
+
+AgentSync also ships a reusable workflow that can sync native agent files and
+open or update a pull request when generated files change.
+
+```yaml
+name: AgentSync Auto Sync
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  sync:
+    uses: chasepd/AgentSync/.github/workflows/agentsync-sync-pr.yml@main
+    with:
+      sync-command: agentsync sync --all --from agents-md --to claude,cursor,opencode --write
+      branch: agentsync/auto-sync
+      pr-title: Sync agent configuration
+```
+
+By default, the reusable workflow installs AgentSync from `chasepd/AgentSync`
+at `main`. Pin `agentsync-ref` to a release tag or commit for stricter
+reproducibility. The default `GITHUB_TOKEN` can create the sync branch and PR
+when the caller grants `contents: write` and `pull-requests: write`; pass a
+custom `token` secret if your repo needs PR-created workflows to trigger:
+
+```yaml
+    secrets:
+      token: ${{ secrets.AGENTSYNC_SYNC_TOKEN }}
+```
+
+Run this only from trusted events, such as `push` to the default branch,
+`schedule`, or `workflow_dispatch`; the configured `sync-command` runs with the
+caller workflow's write token.
+
 ## Design principles
 
 - Native files over proprietary lock-in.

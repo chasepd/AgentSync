@@ -1,0 +1,164 @@
+name: AgentSync Sync PR
+
+on:
+  workflow_call:
+    inputs:
+      agentsync-repository:
+        description: Repository to install AgentSync from.
+        required: false
+        type: string
+        default: chasepd/AgentSync
+      agentsync-ref:
+        description: Branch, tag, or commit to install AgentSync from.
+        required: false
+        type: string
+        default: main
+      rust-toolchain:
+        description: Rust toolchain used to build the AgentSync CLI.
+        required: false
+        type: string
+        default: "1.95.0"
+      sync-command:
+        description: AgentSync command to run. It must include explicit write intent.
+        required: false
+        type: string
+        default: agentsync sync --all --from agents-md --to claude,cursor,opencode --write
+      base-branch:
+        description: Pull request base branch. Defaults to the triggering ref.
+        required: false
+        type: string
+        default: ""
+      branch:
+        description: Branch used for generated sync changes.
+        required: false
+        type: string
+        default: agentsync/auto-sync
+      commit-message:
+        description: Commit message for generated sync changes.
+        required: false
+        type: string
+        default: Sync agent configuration
+      pr-title:
+        description: Pull request title for generated sync changes.
+        required: false
+        type: string
+        default: Sync agent configuration
+      pr-body:
+        description: Pull request body for generated sync changes.
+        required: false
+        type: string
+        default: |
+          AgentSync generated updates to keep native agent configuration files in sync.
+      draft:
+        description: Open the generated pull request as a draft.
+        required: false
+        type: boolean
+        default: false
+    secrets:
+      token:
+        description: Optional token for checkout, push, and PR creation.
+        required: false
+    outputs:
+      changed:
+        description: Whether AgentSync produced repository changes.
+        value: ${{ jobs.sync.outputs.changed }}
+      pull-request-url:
+        description: URL for the created or updated pull request.
+        value: ${{ jobs.sync.outputs.pull-request-url }}
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    concurrency:
+      group: agentsync-sync-pr-${{ github.repository }}-${{ inputs.branch }}
+      cancel-in-progress: false
+    outputs:
+      changed: ${{ steps.changes.outputs.changed }}
+      pull-request-url: ${{ steps.pull-request.outputs.url }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          token: ${{ secrets.token || github.token }}
+
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: ${{ inputs.rust-toolchain }}
+
+      - name: Install AgentSync
+        env:
+          AGENTSYNC_REPOSITORY: ${{ inputs.agentsync-repository }}
+          AGENTSYNC_REF: ${{ inputs.agentsync-ref }}
+        run: |
+          set -euo pipefail
+          source_dir="$RUNNER_TEMP/agentsync-source"
+          rm -rf "$source_dir"
+          git init "$source_dir"
+          git -C "$source_dir" remote add origin "$GITHUB_SERVER_URL/$AGENTSYNC_REPOSITORY.git"
+          git -C "$source_dir" fetch --depth 1 origin "$AGENTSYNC_REF"
+          git -C "$source_dir" checkout --detach FETCH_HEAD
+          cargo install --path "$source_dir/crates/agentsync-cli" --locked
+
+      - name: Run AgentSync
+        run: ${{ inputs.sync-command }}
+
+      - name: Detect changes
+        id: changes
+        run: |
+          set -euo pipefail
+          if [ -n "$(git status --porcelain)" ]; then
+            echo "changed=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "changed=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Commit and push sync branch
+        if: steps.changes.outputs.changed == 'true'
+        env:
+          BRANCH: ${{ inputs.branch }}
+          COMMIT_MESSAGE: ${{ inputs.commit-message }}
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git switch -C "$BRANCH"
+          git add -A
+          git commit -m "$COMMIT_MESSAGE"
+          git push --force-with-lease origin "$BRANCH"
+
+      - name: Create or update pull request
+        if: steps.changes.outputs.changed == 'true'
+        id: pull-request
+        env:
+          GH_TOKEN: ${{ secrets.token || github.token }}
+          GH_REPO: ${{ github.repository }}
+          BASE_BRANCH: ${{ inputs.base-branch }}
+          BRANCH: ${{ inputs.branch }}
+          PR_TITLE: ${{ inputs.pr-title }}
+          PR_BODY: ${{ inputs.pr-body }}
+          DRAFT: ${{ inputs.draft }}
+        run: |
+          set -euo pipefail
+          base_branch="${BASE_BRANCH:-$GITHUB_REF_NAME}"
+          body_file="$RUNNER_TEMP/agentsync-pr-body.md"
+          printf '%s\n' "$PR_BODY" > "$body_file"
+
+          number="$(gh pr list --head "$BRANCH" --state open --json number --jq '.[0].number')"
+          if [ -n "$number" ]; then
+            gh pr edit "$number" --base "$base_branch" --title "$PR_TITLE" --body-file "$body_file"
+          else
+            args=(--base "$base_branch" --head "$BRANCH" --title "$PR_TITLE" --body-file "$body_file")
+            if [ "$DRAFT" = "true" ]; then
+              args+=(--draft)
+            fi
+            url="$(gh pr create "${args[@]}")"
+            echo "url=$url" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          url="$(gh pr view "$number" --json url --jq '.url')"
+          echo "url=$url" >> "$GITHUB_OUTPUT"

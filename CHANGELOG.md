@@ -14,6 +14,7 @@ configuration.
 - Preview generated changes with `diff`, write only with explicit `--write`, and track sync metadata in `.agentsync/state.json`.
 - Detect drift with `status` and `status --check` for CI.
 - Run a dedicated GitHub Actions drift workflow with `agentsync status --check`.
+- Provide a reusable GitHub Actions workflow that syncs native files and opens a PR when changes are generated.
 - Target specific resources such as `agentsync diff skill review` and `agentsync sync subagent reviewer`.
 - Sync every matching resource kind with `agentsync sync --all`.
 - Protect existing files with backups, `--no-overwrite`, `--strategy source`, and `--strategy newest`.
