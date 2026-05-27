@@ -17,6 +17,7 @@ configuration.
 - Provide a reusable GitHub Actions workflow that syncs native files and opens a PR when changes are generated.
 - Target specific resources such as `agentsync diff skill review` and `agentsync sync subagent reviewer`.
 - Sync every matching resource kind with `agentsync sync --all`.
+- Sync from the changed native source to every target with `agentsync sync --all --from all --to all`.
 - Protect existing files with backups, `--no-overwrite`, `--strategy source`, and `--strategy newest`.
 - Resolve conflicts with `sync --interactive` when running in a TTY.
 - Parse YAML frontmatter for skills and subagents while preserving unsupported native fields.

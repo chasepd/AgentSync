@@ -128,6 +128,277 @@ hooks = false
 }
 
 #[test]
+fn sync_from_all_to_all_uses_changed_tracked_target_as_source() {
+    let dir = tempdir().unwrap();
+    fs::write(dir.path().join("AGENTS.md"), "old rules\n").unwrap();
+
+    Command::cargo_bin("agentsync")
+        .unwrap()
+        .current_dir(dir.path())
+        .args([
+            "sync",
+            "rules",
+            "--from",
+            "agents-md",
+            "--to",
+            "claude",
+            "--write",
+        ])
+        .assert()
+        .success();
+
+    let claude_mtime = modified_time(&dir.path().join("CLAUDE.md"));
+    write_until_newer(&dir.path().join("CLAUDE.md"), "new rules\n", claude_mtime);
+    let claude_mtime = modified_time(&dir.path().join("CLAUDE.md"));
+    write_until_newer(&dir.path().join("AGENTS.md"), "old rules\n", claude_mtime);
+
+    Command::cargo_bin("agentsync")
+        .unwrap()
+        .current_dir(dir.path())
+        .args(["sync", "rules", "--from", "all", "--to", "all", "--write"])
+        .assert()
+        .success();
+
+    assert_eq!(
+        fs::read_to_string(dir.path().join("AGENTS.md")).unwrap(),
+        "new rules\n"
+    );
+    assert_eq!(
+        fs::read_to_string(dir.path().join("CLAUDE.md")).unwrap(),
+        "new rules\n"
+    );
+    assert_eq!(
+        fs::read_to_string(dir.path().join(".cursor/rules/agentsync.md")).unwrap(),
+        "new rules\n"
+    );
+}
+
+#[test]
+fn sync_from_all_blocks_multiple_changed_sources_for_same_resource() {
+    let dir = tempdir().unwrap();
+    fs::write(dir.path().join("AGENTS.md"), "old rules\n").unwrap();
+
+    Command::cargo_bin("agentsync")
+        .unwrap()
+        .current_dir(dir.path())
+        .args([
+            "sync",
+            "rules",
+            "--from",
+            "agents-md",
+            "--to",
+            "claude,cursor",
+            "--write",
+        ])
+        .assert()
+        .success();
+
+    let claude_mtime = modified_time(&dir.path().join("CLAUDE.md"));
+    write_until_newer(
+        &dir.path().join("CLAUDE.md"),
+        "claude rules\n",
+        claude_mtime,
+    );
+    let claude_mtime = modified_time(&dir.path().join("CLAUDE.md"));
+    write_until_newer(
+        &dir.path().join(".cursor/rules/agentsync.md"),
+        "cursor rules\n",
+        claude_mtime,
+    );
+
+    let output = Command::cargo_bin("agentsync")
+        .unwrap()
+        .current_dir(dir.path())
+        .args(["sync", "rules", "--from", "all", "--to", "all", "--write"])
+        .assert()
+        .failure()
+        .get_output()
+        .stderr
+        .clone();
+    let stderr = String::from_utf8(output).unwrap();
+
+    assert!(stderr.contains("multiple changed source resources found for rules"));
+}
+
+#[test]
+fn sync_all_uses_all_source_and_targets_from_config() {
+    let dir = tempdir().unwrap();
+    fs::create_dir_all(dir.path().join(".agentsync")).unwrap();
+    fs::create_dir_all(dir.path().join(".codex/skills/review")).unwrap();
+    fs::write(dir.path().join("AGENTS.md"), "repo rules\n").unwrap();
+    fs::write(
+        dir.path().join(".codex/skills/review/SKILL.md"),
+        "---\nname: review\n---\nReview body\n",
+    )
+    .unwrap();
+    fs::write(
+        dir.path().join(".agentsync/config.toml"),
+        r#"schema_version = 1
+
+[defaults]
+source = "all"
+targets = ["all"]
+
+[sync]
+rules = true
+skills = true
+subagents = false
+commands = false
+hooks = false
+"#,
+    )
+    .unwrap();
+
+    Command::cargo_bin("agentsync")
+        .unwrap()
+        .current_dir(dir.path())
+        .args(["sync", "--all", "--write"])
+        .assert()
+        .success();
+
+    assert_eq!(
+        fs::read_to_string(dir.path().join("CLAUDE.md")).unwrap(),
+        "repo rules\n"
+    );
+    assert_eq!(
+        fs::read_to_string(dir.path().join(".claude/skills/review/SKILL.md")).unwrap(),
+        "---\nname: review\n---\nReview body\n"
+    );
+    assert_eq!(
+        fs::read_to_string(dir.path().join(".cursor/skills/review/SKILL.md")).unwrap(),
+        "---\nname: review\n---\nReview body\n"
+    );
+    assert_eq!(
+        fs::read_to_string(dir.path().join(".opencode/skills/review/SKILL.md")).unwrap(),
+        "---\nname: review\n---\nReview body\n"
+    );
+}
+
+#[test]
+fn sync_from_all_to_all_preserves_selected_source_file() {
+    let dir = tempdir().unwrap();
+    fs::create_dir_all(dir.path().join(".codex/skills/review")).unwrap();
+    let source = "---\nname: review\ndescription: Review things\n---\nReview body\n";
+    fs::write(dir.path().join(".codex/skills/review/SKILL.md"), source).unwrap();
+
+    Command::cargo_bin("agentsync")
+        .unwrap()
+        .current_dir(dir.path())
+        .args(["sync", "skills", "--from", "all", "--to", "all", "--write"])
+        .assert()
+        .success();
+
+    assert_eq!(
+        fs::read_to_string(dir.path().join(".codex/skills/review/SKILL.md")).unwrap(),
+        source
+    );
+    assert!(dir.path().join(".claude/skills/review/SKILL.md").exists());
+    assert!(dir.path().join(".cursor/skills/review/SKILL.md").exists());
+    assert!(dir.path().join(".opencode/skills/review/SKILL.md").exists());
+}
+
+#[test]
+fn sync_from_all_to_all_uses_changed_duplicate_skill_source() {
+    let dir = tempdir().unwrap();
+    fs::create_dir_all(dir.path().join(".codex/skills/review")).unwrap();
+    fs::write(
+        dir.path().join(".codex/skills/review/SKILL.md"),
+        "---\nname: review\n---\nOld body\n",
+    )
+    .unwrap();
+
+    Command::cargo_bin("agentsync")
+        .unwrap()
+        .current_dir(dir.path())
+        .args([
+            "sync", "skills", "--from", "codex", "--to", "claude", "--write",
+        ])
+        .assert()
+        .success();
+
+    let claude_path = dir.path().join(".claude/skills/review/SKILL.md");
+    let claude_mtime = modified_time(&claude_path);
+    write_until_newer(
+        &claude_path,
+        "---\nname: review\n---\nNew body\n",
+        claude_mtime,
+    );
+    let claude_mtime = modified_time(&claude_path);
+    write_until_newer(
+        &dir.path().join(".codex/skills/review/SKILL.md"),
+        "---\nname: review\n---\nOld body\n",
+        claude_mtime,
+    );
+
+    Command::cargo_bin("agentsync")
+        .unwrap()
+        .current_dir(dir.path())
+        .args(["sync", "skills", "--from", "all", "--to", "all", "--write"])
+        .assert()
+        .success();
+
+    assert_eq!(
+        fs::read_to_string(dir.path().join(".codex/skills/review/SKILL.md")).unwrap(),
+        "---\nname: review\n---\nNew body\n"
+    );
+    let state: Value = serde_json::from_str(
+        &fs::read_to_string(dir.path().join(".agentsync/state.json")).unwrap(),
+    )
+    .unwrap();
+    let source_agent = state["resources"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|resource| resource["resource_id"] == "skills:review")
+        .unwrap()["source_agent"]
+        .as_str()
+        .unwrap();
+    assert_eq!(source_agent, "claude");
+}
+
+#[test]
+fn sync_from_all_to_all_does_not_conflict_with_unchanged_duplicate_target() {
+    let dir = tempdir().unwrap();
+    fs::create_dir_all(dir.path().join(".codex/skills/review")).unwrap();
+    let codex_path = dir.path().join(".codex/skills/review/SKILL.md");
+    fs::write(&codex_path, "---\nname: review\n---\nOld body\n").unwrap();
+
+    Command::cargo_bin("agentsync")
+        .unwrap()
+        .current_dir(dir.path())
+        .args([
+            "sync", "skills", "--from", "codex", "--to", "claude", "--write",
+        ])
+        .assert()
+        .success();
+
+    let codex_mtime = modified_time(&codex_path);
+    write_until_newer(
+        &codex_path,
+        "---\nname: review\n---\nNew body\n",
+        codex_mtime,
+    );
+    let codex_mtime = modified_time(&codex_path);
+    write_until_newer(
+        &dir.path().join(".claude/skills/review/SKILL.md"),
+        "---\nname: review\n---\nOld body\n",
+        codex_mtime,
+    );
+
+    Command::cargo_bin("agentsync")
+        .unwrap()
+        .current_dir(dir.path())
+        .args(["sync", "skills", "--from", "all", "--to", "all", "--write"])
+        .assert()
+        .success();
+
+    assert_eq!(
+        fs::read_to_string(dir.path().join(".claude/skills/review/SKILL.md")).unwrap(),
+        "---\nname: review\n---\nNew body\n"
+    );
+}
+
+#[test]
 fn sync_without_resource_requires_all_flag() {
     let dir = tempdir().unwrap();
 

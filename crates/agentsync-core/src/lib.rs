@@ -5,7 +5,7 @@ pub mod model;
 pub mod report;
 pub mod state;
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 use std::path::{Path, PathBuf};
 
@@ -51,6 +51,23 @@ pub fn scan_roots_with_adapters(
     scope: Scope,
     adapters: &AdapterRegistry,
 ) -> Result<ScanReport, AgentSyncError> {
+    scan_roots_with_adapters_inner(roots, scope, adapters, true)
+}
+
+fn scan_roots_with_adapters_preserving_sources(
+    roots: DiscoveryRoots,
+    scope: Scope,
+    adapters: &AdapterRegistry,
+) -> Result<ScanReport, AgentSyncError> {
+    scan_roots_with_adapters_inner(roots, scope, adapters, false)
+}
+
+fn scan_roots_with_adapters_inner(
+    roots: DiscoveryRoots,
+    scope: Scope,
+    adapters: &AdapterRegistry,
+    dedup_normalized: bool,
+) -> Result<ScanReport, AgentSyncError> {
     let mut report = ScanReport::empty(scope);
     if matches!(scope, Scope::Project | Scope::All) {
         scan_scope_root(&roots.project, Scope::Project, &mut report, adapters)?;
@@ -59,12 +76,23 @@ pub fn scan_roots_with_adapters(
         scan_scope_root(&roots.user, Scope::User, &mut report, adapters)?;
     }
     report.resources.sort_by_key(resource_sort_key);
-    report
-        .normalized
-        .sort_by(|a, b| (a.scope, &a.id).cmp(&(b.scope, &b.id)));
-    report
-        .normalized
-        .dedup_by(|a, b| a.scope == b.scope && a.id == b.id);
+    if dedup_normalized {
+        report
+            .normalized
+            .sort_by(|a, b| (a.scope, &a.id).cmp(&(b.scope, &b.id)));
+        report
+            .normalized
+            .dedup_by(|a, b| a.scope == b.scope && a.id == b.id);
+    } else {
+        report.normalized.sort_by(|a, b| {
+            (a.scope, &a.id, a.source_agent, &a.native_paths).cmp(&(
+                b.scope,
+                &b.id,
+                b.source_agent,
+                &b.native_paths,
+            ))
+        });
+    }
     Ok(report)
 }
 
@@ -467,16 +495,17 @@ pub fn plan_filters_with_options_and_adapters(
     adapters: &AdapterRegistry,
 ) -> Result<PlanReport, AgentSyncError> {
     let root = root.as_ref();
-    let scan = scan_roots_with_adapters(
-        DiscoveryRoots {
-            project: root.to_path_buf(),
-            user: root.to_path_buf(),
-        },
-        Scope::Project,
-        adapters,
-    )?;
+    let roots = DiscoveryRoots {
+        project: root.to_path_buf(),
+        user: root.to_path_buf(),
+    };
+    let scan = if from == SourceAlias::All {
+        scan_roots_with_adapters_preserving_sources(roots, Scope::Project, adapters)?
+    } else {
+        scan_roots_with_adapters(roots, Scope::Project, adapters)?
+    };
     let state = load_state(root)?;
-    let sources = select_sources_for_filters(&scan.normalized, filters, from)?;
+    let sources = select_sources_for_filters(root, &state, &scan.normalized, filters, from)?;
     let mut actions = Vec::new();
     let mut diagnostics = Vec::new();
     for source in sources {
@@ -514,6 +543,17 @@ pub fn plan_filters_with_options_and_adapters(
             let (rendered, render_diagnostics) = render_for_target(source, *target, adapters)?;
             diagnostics.extend(render_diagnostics);
             for file in rendered {
+                if from == SourceAlias::All && source_owns_path(source, &file.path) {
+                    actions.push(PlanAction {
+                        action: PlanActionKind::Skip,
+                        path: file.path.clone(),
+                        resource_id: source.id.clone(),
+                        reason: format!("source path from {}", source.id),
+                        rendered: Some(file),
+                        diff: None,
+                    });
+                    continue;
+                }
                 let path = root.join(&file.path);
                 let (action, reason) = if path.exists() {
                     let existing = fs::read_to_string(&path)?;
@@ -695,11 +735,18 @@ pub fn is_interactive_conflict(action: &PlanAction) -> bool {
 }
 
 fn select_sources<'a>(
+    root: &Path,
+    state: &StateFile,
     resources: &'a [NormalizedResource],
     filter: &ResourceFilter,
     from: SourceAlias,
 ) -> Result<Vec<&'a NormalizedResource>, AgentSyncError> {
-    let selected = select_sources_for_filter(resources, filter, from);
+    let selected = resolve_all_source_groups(
+        root,
+        state,
+        select_sources_for_filter(resources, filter, from),
+        from,
+    )?;
     if selected.is_empty() {
         let suffix = filter
             .name
@@ -716,17 +763,20 @@ fn select_sources<'a>(
 }
 
 fn select_sources_for_filters<'a>(
+    root: &Path,
+    state: &StateFile,
     resources: &'a [NormalizedResource],
     filters: &[ResourceFilter],
     from: SourceAlias,
 ) -> Result<Vec<&'a NormalizedResource>, AgentSyncError> {
     if let [filter] = filters {
-        return select_sources(resources, filter, from);
+        return select_sources(root, state, resources, filter, from);
     }
     let mut selected = Vec::new();
     for filter in filters {
         selected.extend(select_sources_for_filter(resources, filter, from));
     }
+    let selected = resolve_all_source_groups(root, state, selected, from)?;
     if selected.is_empty() {
         Err(AgentSyncError::InvalidArgument(
             "requested source resources were not found".to_string(),
@@ -751,16 +801,7 @@ fn select_sources_for_filter<'a>(
     let mut selected = resources
         .iter()
         .filter(|resource| resource.kind == kind)
-        .filter(|resource| match from {
-            SourceAlias::AgentsMd => resource
-                .native_paths
-                .iter()
-                .any(|path| path == Path::new("AGENTS.md")),
-            SourceAlias::Codex => resource.source_agent == Agent::Codex,
-            SourceAlias::Claude => resource.source_agent == Agent::Claude,
-            SourceAlias::CursorCli => resource.source_agent == Agent::CursorCli,
-            SourceAlias::OpenCode => resource.source_agent == Agent::OpenCode,
-        })
+        .filter(|resource| source_matches_alias(resource, from))
         .filter(|resource| {
             filter
                 .name
@@ -768,10 +809,199 @@ fn select_sources_for_filter<'a>(
                 .is_none_or(|name| resource_matches_name(resource, name))
         })
         .collect::<Vec<_>>();
-    if filter.selector == ResourceSelector::Rules && filter.name.is_none() {
+    if from != SourceAlias::All
+        && filter.selector == ResourceSelector::Rules
+        && filter.name.is_none()
+    {
         selected.truncate(1);
     }
     selected
+}
+
+fn source_matches_alias(resource: &NormalizedResource, from: SourceAlias) -> bool {
+    match from {
+        SourceAlias::All => true,
+        SourceAlias::AgentsMd => resource
+            .native_paths
+            .iter()
+            .any(|path| path == Path::new("AGENTS.md")),
+        SourceAlias::Codex => resource.source_agent == Agent::Codex,
+        SourceAlias::Claude => resource.source_agent == Agent::Claude,
+        SourceAlias::CursorCli => resource.source_agent == Agent::CursorCli,
+        SourceAlias::OpenCode => resource.source_agent == Agent::OpenCode,
+    }
+}
+
+fn resolve_all_source_groups<'a>(
+    root: &Path,
+    state: &StateFile,
+    selected: Vec<&'a NormalizedResource>,
+    from: SourceAlias,
+) -> Result<Vec<&'a NormalizedResource>, AgentSyncError> {
+    if from != SourceAlias::All {
+        return Ok(selected);
+    }
+
+    let mut groups: BTreeMap<String, Vec<&NormalizedResource>> = BTreeMap::new();
+    for resource in selected {
+        groups
+            .entry(logical_resource_key(resource))
+            .or_default()
+            .push(resource);
+    }
+
+    let mut resolved = Vec::new();
+    for (group, candidates) in groups {
+        resolved.push(resolve_all_source_group(root, state, &group, candidates)?);
+    }
+    Ok(resolved)
+}
+
+fn resolve_all_source_group<'a>(
+    root: &Path,
+    state: &StateFile,
+    group: &str,
+    candidates: Vec<&'a NormalizedResource>,
+) -> Result<&'a NormalizedResource, AgentSyncError> {
+    let candidates = dedup_same_source_paths(state, candidates);
+    let mut changed = Vec::new();
+    for candidate in &candidates {
+        if source_changed_since_state(root, state, candidate)? {
+            changed.push(*candidate);
+        }
+    }
+    match changed.as_slice() {
+        [candidate] => Ok(*candidate),
+        [] => newest_source(root, candidates),
+        _ => Err(AgentSyncError::InvalidArgument(format!(
+            "multiple changed source resources found for {group}; pass --from to choose one source"
+        ))),
+    }
+}
+
+fn dedup_same_source_paths<'a>(
+    state: &StateFile,
+    candidates: Vec<&'a NormalizedResource>,
+) -> Vec<&'a NormalizedResource> {
+    let mut by_paths: BTreeMap<BTreeSet<PathBuf>, Vec<&NormalizedResource>> = BTreeMap::new();
+    for candidate in candidates {
+        by_paths
+            .entry(resource_tracked_paths(candidate))
+            .or_default()
+            .push(candidate);
+    }
+
+    by_paths
+        .into_values()
+        .filter_map(|candidates| select_same_path_candidate(state, candidates))
+        .collect()
+}
+
+fn select_same_path_candidate<'a>(
+    state: &StateFile,
+    candidates: Vec<&'a NormalizedResource>,
+) -> Option<&'a NormalizedResource> {
+    if candidates.len() <= 1 {
+        return candidates.into_iter().next();
+    }
+
+    if let Some(candidate) = candidates.iter().find(|candidate| {
+        state.resources.iter().any(|entry| {
+            entry.resource_id == candidate.id
+                && entry.source_agent == Some(candidate.source_agent)
+                && entry.source_paths == candidate.native_paths
+        })
+    }) {
+        return Some(*candidate);
+    }
+
+    candidates.into_iter().min_by_key(|candidate| {
+        (
+            candidate.scope,
+            candidate.id.as_str(),
+            candidate.source_agent,
+            &candidate.native_paths,
+        )
+    })
+}
+
+fn newest_source<'a>(
+    root: &Path,
+    candidates: Vec<&'a NormalizedResource>,
+) -> Result<&'a NormalizedResource, AgentSyncError> {
+    let mut selected: Option<(std::time::SystemTime, &NormalizedResource)> = None;
+    for candidate in candidates {
+        let modified = source_modified_time(root, candidate)?;
+        let replace = selected
+            .as_ref()
+            .is_none_or(|(selected_modified, selected_resource)| {
+                modified > *selected_modified
+                    || (modified == *selected_modified
+                        && candidate.id.as_str() < selected_resource.id.as_str())
+            });
+        if replace {
+            selected = Some((modified, candidate));
+        }
+    }
+    selected.map(|(_, candidate)| candidate).ok_or_else(|| {
+        AgentSyncError::InvalidArgument("requested source resources were not found".to_string())
+    })
+}
+
+fn source_changed_since_state(
+    root: &Path,
+    state: &StateFile,
+    resource: &NormalizedResource,
+) -> Result<bool, AgentSyncError> {
+    if let Some(entry) = state.resources.iter().find(|entry| {
+        entry.resource_id == resource.id
+            && entry.source_agent == Some(resource.source_agent)
+            && entry.source_paths == resource.native_paths
+    }) {
+        return Ok(entry.source_checksum != normalized_checksum(resource)?);
+    }
+
+    let paths = resource_tracked_paths(resource);
+    for target in state.resources.iter().flat_map(|entry| &entry.targets) {
+        if paths.contains(&target.path) {
+            let current = fs::read(root.join(&target.path))?;
+            if sha256_bytes(&current) != target.native_checksum {
+                return Ok(true);
+            }
+        }
+    }
+    Ok(false)
+}
+
+fn resource_tracked_paths(resource: &NormalizedResource) -> BTreeSet<PathBuf> {
+    let mut paths = resource
+        .native_paths
+        .iter()
+        .cloned()
+        .collect::<BTreeSet<_>>();
+    if let Some(skill) = &resource.skill {
+        paths.extend(skill.asset_paths.iter().cloned());
+    }
+    paths
+}
+
+fn source_owns_path(resource: &NormalizedResource, path: &Path) -> bool {
+    resource.native_paths.iter().any(|native| native == path)
+        || resource
+            .skill
+            .as_ref()
+            .is_some_and(|skill| skill.asset_paths.iter().any(|asset| asset == path))
+}
+
+fn logical_resource_key(resource: &NormalizedResource) -> String {
+    match resource.kind {
+        ResourceKind::RuleSet => "rules".to_string(),
+        ResourceKind::Skill | ResourceKind::Subagent | ResourceKind::Command => {
+            let name = resource_short_name(resource).unwrap_or(&resource.id);
+            format!("{}:{name}", resource.kind.as_str())
+        }
+        _ => resource.id.clone(),
+    }
 }
 
 fn resource_matches_name(resource: &NormalizedResource, name: &str) -> bool {
@@ -1024,7 +1254,19 @@ fn hunk_start(mut lines: impl Iterator<Item = usize>) -> usize {
 }
 
 fn save_state_from_plan(root: &Path, report: &PlanReport) -> Result<(), AgentSyncError> {
-    let scan = scan_root(root, Scope::Project)?;
+    let source_paths = source_paths_from_plan(report);
+    let scan = if source_paths.is_empty() {
+        scan_root(root, Scope::Project)?
+    } else {
+        scan_roots_with_adapters_preserving_sources(
+            DiscoveryRoots {
+                project: root.to_path_buf(),
+                user: root.to_path_buf(),
+            },
+            Scope::Project,
+            &AdapterRegistry::built_in(),
+        )?
+    };
     let mut state = load_state(root)?;
     let now = Utc::now().to_rfc3339();
     let mut by_resource: BTreeMap<String, Vec<StateTarget>> = BTreeMap::new();
@@ -1052,11 +1294,11 @@ fn save_state_from_plan(root: &Path, report: &PlanReport) -> Result<(), AgentSyn
         return Ok(());
     }
     for (resource_id, targets) in by_resource {
-        let Some(source) = scan
-            .normalized
-            .iter()
-            .find(|resource| resource.id == resource_id)
-        else {
+        let Some(source) = find_state_source(
+            &scan.normalized,
+            &resource_id,
+            source_paths.get(&resource_id),
+        ) else {
             continue;
         };
         let source_checksum = normalized_checksum(source)?;
@@ -1089,6 +1331,41 @@ fn save_state_from_plan(root: &Path, report: &PlanReport) -> Result<(), AgentSyn
         .resources
         .sort_by(|a, b| a.resource_id.cmp(&b.resource_id));
     save_state(root, &state)
+}
+
+fn source_paths_from_plan(report: &PlanReport) -> BTreeMap<String, BTreeSet<PathBuf>> {
+    let mut source_paths = BTreeMap::new();
+    for action in &report.actions {
+        if action.action != PlanActionKind::Skip {
+            continue;
+        }
+        if action.reason != format!("source path from {}", action.resource_id) {
+            continue;
+        }
+        source_paths
+            .entry(action.resource_id.clone())
+            .or_insert_with(BTreeSet::new)
+            .insert(action.path.clone());
+    }
+    source_paths
+}
+
+fn find_state_source<'a>(
+    resources: &'a [NormalizedResource],
+    resource_id: &str,
+    source_paths: Option<&BTreeSet<PathBuf>>,
+) -> Option<&'a NormalizedResource> {
+    if let Some(source_paths) = source_paths {
+        if let Some(resource) = resources.iter().find(|resource| {
+            resource.id == resource_id
+                && source_paths
+                    .iter()
+                    .all(|path| source_owns_path(resource, path))
+        }) {
+            return Some(resource);
+        }
+    }
+    resources.iter().find(|resource| resource.id == resource_id)
 }
 
 fn infer_agent_from_path(path: &Path) -> Agent {
