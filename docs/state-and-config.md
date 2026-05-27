@@ -24,8 +24,8 @@ schema_version = 1
 
 [defaults]
 scope = "project"
-source = "agents-md"
-targets = ["claude", "cursor", "opencode"]
+source = "all"
+targets = ["all"]
 
 [sync]
 rules = true
@@ -49,9 +49,10 @@ agentsync sync --all --write
 
 `defaults.source = "all"` tells AgentSync to choose the changed source for each
 logical resource. `defaults.targets = ["all"]` expands to every supported target
-agent. This is useful for repos where different contributors edit different
-native tools. If a repo has no state metadata yet and native files already
-disagree, run the first sync with an explicit `--from`.
+agent: Codex CLI, Claude Code, Cursor CLI, and OpenCode. This is useful for
+repos where different contributors edit different native tools. If a repo has
+no state metadata yet and native files already disagree, run the first sync with
+an explicit `--from`.
 
 When `diff` or `sync` use config defaults, `[sync]` toggles gate the selected
 resource kind. For example, `rules = false` blocks config-driven rules planning,

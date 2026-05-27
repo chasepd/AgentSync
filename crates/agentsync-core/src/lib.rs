@@ -260,8 +260,8 @@ fn default_config() -> String {
 
 [defaults]
 scope = "project"
-source = "agents-md"
-targets = ["claude", "cursor", "opencode"]
+source = "all"
+targets = ["all"]
 
 [sync]
 rules = true

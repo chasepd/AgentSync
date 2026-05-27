@@ -307,8 +307,8 @@ schema_version = 1
 
 [defaults]
 scope = "project"
-source = "agents-md"
-targets = ["claude", "cursor", "opencode"]
+source = "all"
+targets = ["all"]
 
 [sync]
 rules = true
@@ -319,7 +319,8 @@ hooks = false
 ```
 
 With those defaults, `scan` and `status` can omit `--scope`, while `diff` and
-`sync` can omit `--from` and `--to`:
+`sync` can omit `--from` and `--to`. `targets = ["all"]` expands to Codex CLI,
+Claude Code, Cursor CLI, and OpenCode:
 
 ```bash
 agentsync scan
@@ -334,12 +335,12 @@ agentsync sync --all --write
 any write. New configs default blocked behavioral resources to disabled:
 `subagents = false`, `commands = false`, and `hooks = false`.
 
-Use `source = "all"` and `targets = ["all"]` when contributors may edit
-different native tools and you want `agentsync sync --all --write` to deploy the
-changed source to every supported target. If multiple sources for the same
-resource changed differently, AgentSync stops and asks for an explicit `--from`.
-On repos without existing `.agentsync/state.json` metadata, use an explicit
-`--from` for the first sync if native files already disagree.
+Use `source = "all"` when contributors may edit different native tools and you
+want `agentsync sync --all --write` to deploy the changed source to every
+supported target. If multiple sources for the same resource changed differently,
+AgentSync stops and asks for an explicit `--from`. On repos without existing
+`.agentsync/state.json` metadata, use an explicit `--from` for the first sync if
+native files already disagree.
 
 ## Conversion notes
 

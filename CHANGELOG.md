@@ -18,6 +18,7 @@ configuration.
 - Target specific resources such as `agentsync diff skill review` and `agentsync sync subagent reviewer`.
 - Sync every matching resource kind with `agentsync sync --all`.
 - Sync from the changed native source to every target with `agentsync sync --all --from all --to all`.
+- Initialize new configs with all-source and all-target defaults.
 - Protect existing files with backups, `--no-overwrite`, `--strategy source`, and `--strategy newest`.
 - Resolve conflicts with `sync --interactive` when running in a TTY.
 - Parse YAML frontmatter for skills and subagents while preserving unsupported native fields.
