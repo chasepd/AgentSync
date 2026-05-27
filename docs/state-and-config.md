@@ -59,8 +59,8 @@ resource kind. For example, `rules = false` blocks config-driven rules planning,
 and `skills = false` blocks config-driven skills planning before any write.
 For `sync --all`, disabled resource kinds are skipped; the command fails if no
 resource kinds remain enabled. Behavioral resources default to disabled in newly
-generated config because subagents, commands, and hooks are read-only/blocked in
-the MVP.
+generated config because subagents, commands, and hooks can carry executable or
+target-specific behavior; enable them explicitly after reviewing the plan.
 
 Invalid config is reported by `agentsync doctor --check` and causes commands
 that need config defaults to fail before planning writes.

@@ -21,6 +21,11 @@ behavioral or security-sensitive fields block writes unless the user explicitly
 allows a lossy conversion. Examples include permissions, sandbox policies,
 executable hooks, lifecycle behavior, and plugin code.
 
+Hook resources use the narrower policy in `docs/hook-equivalence-policy.md`.
+AgentSync may render directly equivalent hook entries while reporting unmapped
+entries, but it must not silently drop unsupported hook events, matchers, or
+handler fields.
+
 ## User-Facing Labels
 
 Compatibility output should use clear labels:
@@ -28,4 +33,3 @@ Compatibility output should use clear labels:
 - `portable`: all meaningful fields map.
 - `partial`: some fields are preserved but not rendered.
 - `blocked`: the target cannot represent required behavior.
-

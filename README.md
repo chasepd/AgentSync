@@ -47,7 +47,7 @@ including the shared rules system in `.cursor/rules` and root-level
 | Rules / context | `CLAUDE.md`, `.claude/CLAUDE.md` | `AGENTS.md` | Cursor CLI rules, `AGENTS.md` where supported | `AGENTS.md`, `opencode.json` / `opencode.jsonc` instructions |
 | Subagents / custom agents | `.claude/agents/*.md` | Codex subagents | blocked until Cursor publishes stable CLI file-format docs | `.opencode/agents/*.md`, `opencode.json` agent config |
 | Skills | `.claude/skills/*/SKILL.md` | Agent Skills / `SKILL.md` folders | Agent Skills / `SKILL.md` folders | `.opencode/skills/*/SKILL.md`, `.agents/skills`, Claude-compatible skills |
-| Hooks / lifecycle automation | Claude Code hooks in settings | blocked behavioral resource | blocked behavioral resource | OpenCode plugins and events |
+| Hooks / lifecycle automation | Claude Code hooks in settings (partial direct sync with Codex/Cursor/OpenCode) | `.codex/hooks.json` (partial direct sync with Claude/Cursor/OpenCode) | `.cursor/hooks.json` (partial direct sync with Codex/Claude/OpenCode) | generated `.opencode/plugins/agentsync-hooks.js` shims for supported entries |
 | Commands | Claude skills / legacy commands | planned | planned | `.opencode/commands/*.md`, config commands |
 
 Support levels:
@@ -350,7 +350,9 @@ Examples:
 
 - A Claude Code subagent written as Markdown frontmatter may not map perfectly to another tool's custom-agent schema.
 - A sandbox or permission policy in one tool may not have an equivalent in another.
-- Hook systems vary widely. Some are declarative config, while others are executable plugin code.
+- Hook systems vary widely. AgentSync defines the hook equivalence policy in
+  `docs/hook-equivalence-policy.md` so hook rendering can handle direct entries
+  separately from generated OpenCode shims and report-only diagnostics.
 - Cursor CLI rules and `AGENTS.md` instructions may overlap but are not always equivalent.
 - OpenCode `opencode.json` / `opencode.jsonc` rules are read from literal `instructions` file paths.
   Glob patterns are reported as partial until AgentSync grows deterministic glob expansion.
@@ -361,7 +363,7 @@ When a conversion is lossy, AgentSync marks it clearly:
 
 ```text
 WARN security-reviewer: target does not support field `color`.
-WARN block-env-reads: target hook requires plugin wrapper generation.
+WARN block-env-reads: target hook was omitted because no safe event mapping exists.
 ```
 
 ## CLI reference
@@ -556,7 +558,8 @@ Hooks, plugins, commands, and executable skills can run code. AgentSync treats t
 
 AgentSync will:
 
-- Report hooks, plugins, permissions, and executable behavior as blocked.
+- Report unsupported hooks, plugins, permissions, and executable behavior as
+  blocked or partial according to the compatibility policy.
 - Preserve native fields where possible.
 - Refuse to auto-run generated scripts.
 - Sync only resources with safe render semantics.
