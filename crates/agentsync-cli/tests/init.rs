@@ -32,8 +32,8 @@ fn init_write_creates_config() {
 
     let config = fs::read_to_string(dir.path().join(".agentsync/config.toml")).unwrap();
     assert!(config.contains("schema_version = 1"));
-    assert!(config.contains("source = \"agents-md\""));
-    assert!(config.contains("targets = [\"claude\", \"cursor\", \"opencode\"]"));
+    assert!(config.contains("source = \"all\""));
+    assert!(config.contains("targets = [\"all\"]"));
     assert!(config.contains("rules = true"));
     assert!(config.contains("skills = true"));
     assert!(config.contains("subagents = false"));
