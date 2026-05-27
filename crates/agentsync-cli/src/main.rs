@@ -67,9 +67,12 @@ enum Command {
     },
     /// Generate or update target formats. Writes require --write.
     Sync {
-        resource: CliResource,
+        resource: Option<CliResource>,
 
         name: Option<String>,
+
+        #[arg(long)]
+        all: bool,
 
         #[arg(long)]
         from: Option<CliSource>,
@@ -172,6 +175,12 @@ enum CliFormat {
 enum CliConflictStrategy {
     Source,
     Newest,
+}
+
+#[derive(Clone, Debug)]
+enum SyncSelection {
+    Resource(ResourceSelector, Option<String>),
+    All(Vec<ResourceSelector>),
 }
 
 impl std::fmt::Display for CliScope {
@@ -303,6 +312,7 @@ fn main() -> Result<(), AgentSyncError> {
         Command::Sync {
             resource,
             name,
+            all,
             from,
             to,
             dry_run,
@@ -324,15 +334,30 @@ fn main() -> Result<(), AgentSyncError> {
                     "sync --interactive requires a TTY".to_string(),
                 ));
             }
-            let resource: ResourceSelector = resource.into();
-            let (from, targets) = resolve_plan_args(resource, from, to)?;
-            let mut report = agentsync_core::plan_filtered_with_options(
-                std::env::current_dir()?,
-                resource_filter(resource, name),
-                from,
-                &targets,
-                plan_options(no_overwrite, strategy),
-            )?;
+            let mut selection = resolve_sync_selection(all, resource, name)?;
+            let (from, targets) = resolve_sync_plan_args(&mut selection, from, to)?;
+            let root = std::env::current_dir()?;
+            let options = plan_options(no_overwrite, strategy);
+            let mut report = match selection {
+                SyncSelection::Resource(resource, name) => {
+                    agentsync_core::plan_filtered_with_options(
+                        &root,
+                        resource_filter(resource, name),
+                        from,
+                        &targets,
+                        options,
+                    )?
+                }
+                SyncSelection::All(resources) => {
+                    let filters = resources
+                        .into_iter()
+                        .map(ResourceFilter::all)
+                        .collect::<Vec<_>>();
+                    agentsync_core::plan_filters_with_options(
+                        &root, &filters, from, &targets, options,
+                    )?
+                }
+            };
             if interactive {
                 resolve_interactive_conflicts(&mut report)?;
             }
@@ -342,7 +367,7 @@ fn main() -> Result<(), AgentSyncError> {
                 print!("{}", report.to_text());
             }
             if write {
-                agentsync_core::write_plan(std::env::current_dir()?, &report)?;
+                agentsync_core::write_plan(root, &report)?;
             } else if !dry_run && output != CliFormat::Json {
                 println!("No files written. Re-run with --write to apply changes.");
             }
@@ -417,6 +442,28 @@ fn resource_filter(resource: ResourceSelector, name: Option<String>) -> Resource
         Some(name) => ResourceFilter::named(resource, name),
         None => ResourceFilter::all(resource),
     }
+}
+
+fn resolve_sync_selection(
+    all: bool,
+    resource: Option<CliResource>,
+    name: Option<String>,
+) -> Result<SyncSelection, AgentSyncError> {
+    if all {
+        if resource.is_some() || name.is_some() {
+            return Err(AgentSyncError::InvalidArgument(
+                "sync --all cannot be combined with a resource or name".to_string(),
+            ));
+        }
+        return Ok(SyncSelection::All(ResourceSelector::ALL.to_vec()));
+    }
+    let resource = resource.ok_or_else(|| {
+        AgentSyncError::InvalidArgument(
+            "missing resource; pass --all or one of rules, skills, subagents, commands, hooks"
+                .to_string(),
+        )
+    })?;
+    Ok(SyncSelection::Resource(resource.into(), name))
 }
 
 fn plan_options(no_overwrite: bool, strategy: Option<CliConflictStrategy>) -> PlanOptions {
@@ -519,23 +566,84 @@ fn resolve_plan_args(
     Ok((source, targets))
 }
 
+fn resolve_sync_plan_args(
+    selection: &mut SyncSelection,
+    from: Option<CliSource>,
+    to: Vec<CliAgent>,
+) -> Result<(SourceAlias, Vec<Agent>), AgentSyncError> {
+    let needs_config = from.is_none() || to.is_empty();
+    let config = if needs_config {
+        agentsync_core::config::load_config(std::env::current_dir()?)?
+    } else {
+        None
+    };
+    if let Some(config) = &config {
+        match selection {
+            SyncSelection::Resource(resource, _) => {
+                validate_resource_enabled(*resource, config)?;
+            }
+            SyncSelection::All(resources) => {
+                resources.retain(|resource| resource_enabled(*resource, config));
+                if resources.is_empty() {
+                    return Err(AgentSyncError::InvalidArgument(
+                        "sync --all has no enabled resource kinds in .agentsync/config.toml"
+                            .to_string(),
+                    ));
+                }
+            }
+        }
+    }
+    let source = if let Some(source) = from {
+        SourceAlias::from(source)
+    } else {
+        config
+            .as_ref()
+            .and_then(|config| config.defaults.source)
+            .ok_or_else(|| {
+                AgentSyncError::InvalidArgument(
+                    "missing --from and no defaults.source in .agentsync/config.toml".to_string(),
+                )
+            })?
+    };
+    let targets = if to.is_empty() {
+        config
+            .as_ref()
+            .map(|config| config.defaults.targets.clone())
+            .unwrap_or_default()
+    } else {
+        to.into_iter().map(Agent::from).collect()
+    };
+    if targets.is_empty() {
+        return Err(AgentSyncError::InvalidArgument(
+            "missing --to and no defaults.targets in .agentsync/config.toml".to_string(),
+        ));
+    }
+    Ok((source, targets))
+}
+
 fn validate_resource_enabled(
     resource: ResourceSelector,
     config: &agentsync_core::config::ConfigFile,
 ) -> Result<(), AgentSyncError> {
-    let enabled = match resource {
-        ResourceSelector::Rules => config.sync.rules.unwrap_or(true),
-        ResourceSelector::Skills => config.sync.skills.unwrap_or(true),
-        ResourceSelector::Subagents => config.sync.subagents.unwrap_or(true),
-        ResourceSelector::Commands => config.sync.commands.unwrap_or(true),
-        ResourceSelector::Hooks => config.sync.hooks.unwrap_or(true),
-    };
-    if enabled {
+    if resource_enabled(resource, config) {
         Ok(())
     } else {
         Err(AgentSyncError::InvalidArgument(format!(
             "{} sync is disabled in .agentsync/config.toml",
             resource.as_str()
         )))
+    }
+}
+
+fn resource_enabled(
+    resource: ResourceSelector,
+    config: &agentsync_core::config::ConfigFile,
+) -> bool {
+    match resource {
+        ResourceSelector::Rules => config.sync.rules.unwrap_or(true),
+        ResourceSelector::Skills => config.sync.skills.unwrap_or(true),
+        ResourceSelector::Subagents => config.sync.subagents.unwrap_or(true),
+        ResourceSelector::Commands => config.sync.commands.unwrap_or(true),
+        ResourceSelector::Hooks => config.sync.hooks.unwrap_or(true),
     }
 }

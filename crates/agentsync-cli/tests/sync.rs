@@ -62,6 +62,90 @@ fn sync_without_write_does_not_write_targets_or_state() {
 }
 
 #[test]
+fn sync_all_writes_all_matching_resource_kinds_without_resource_arg() {
+    let dir = tempdir().unwrap();
+    fs::write(dir.path().join("CLAUDE.md"), "claude rules\n").unwrap();
+    fs::create_dir_all(dir.path().join(".claude/skills/review")).unwrap();
+    fs::write(
+        dir.path().join(".claude/skills/review/SKILL.md"),
+        "---\nname: review\n---\nReview body\n",
+    )
+    .unwrap();
+
+    Command::cargo_bin("agentsync")
+        .unwrap()
+        .current_dir(dir.path())
+        .args([
+            "sync", "--all", "--from", "claude", "--to", "codex", "--write",
+        ])
+        .assert()
+        .success();
+
+    assert_eq!(
+        fs::read_to_string(dir.path().join("AGENTS.md")).unwrap(),
+        "claude rules\n"
+    );
+    assert_eq!(
+        fs::read_to_string(dir.path().join(".codex/skills/review/SKILL.md")).unwrap(),
+        "---\nname: review\n---\nReview body\n"
+    );
+}
+
+#[test]
+fn sync_all_uses_config_defaults_and_enabled_resource_kinds() {
+    let dir = tempdir().unwrap();
+    fs::create_dir_all(dir.path().join(".agentsync")).unwrap();
+    fs::write(dir.path().join("AGENTS.md"), "repo rules\n").unwrap();
+    fs::write(
+        dir.path().join(".agentsync/config.toml"),
+        r#"schema_version = 1
+
+[defaults]
+source = "agents-md"
+targets = ["claude"]
+
+[sync]
+rules = true
+skills = false
+subagents = false
+commands = false
+hooks = false
+"#,
+    )
+    .unwrap();
+
+    Command::cargo_bin("agentsync")
+        .unwrap()
+        .current_dir(dir.path())
+        .args(["sync", "--all", "--write"])
+        .assert()
+        .success();
+
+    assert_eq!(
+        fs::read_to_string(dir.path().join("CLAUDE.md")).unwrap(),
+        "repo rules\n"
+    );
+}
+
+#[test]
+fn sync_without_resource_requires_all_flag() {
+    let dir = tempdir().unwrap();
+
+    let output = Command::cargo_bin("agentsync")
+        .unwrap()
+        .current_dir(dir.path())
+        .args(["sync", "--from", "agents-md", "--to", "claude"])
+        .assert()
+        .failure()
+        .get_output()
+        .stderr
+        .clone();
+    let stderr = String::from_utf8(output).unwrap();
+
+    assert!(stderr.contains("missing resource; pass --all"));
+}
+
+#[test]
 fn sync_write_creates_target_and_state() {
     let dir = tempdir().unwrap();
     fs::write(dir.path().join("AGENTS.md"), "repo rules\n").unwrap();

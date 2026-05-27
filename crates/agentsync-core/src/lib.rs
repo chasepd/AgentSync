@@ -430,9 +430,37 @@ pub fn plan_filtered_with_options(
     )
 }
 
+pub fn plan_filters_with_options(
+    root: impl AsRef<Path>,
+    filters: &[ResourceFilter],
+    from: SourceAlias,
+    targets: &[Agent],
+    options: PlanOptions,
+) -> Result<PlanReport, AgentSyncError> {
+    plan_filters_with_options_and_adapters(
+        root,
+        filters,
+        from,
+        targets,
+        options,
+        &AdapterRegistry::built_in(),
+    )
+}
+
 pub fn plan_filtered_with_options_and_adapters(
     root: impl AsRef<Path>,
     filter: ResourceFilter,
+    from: SourceAlias,
+    targets: &[Agent],
+    options: PlanOptions,
+    adapters: &AdapterRegistry,
+) -> Result<PlanReport, AgentSyncError> {
+    plan_filters_with_options_and_adapters(root, &[filter], from, targets, options, adapters)
+}
+
+pub fn plan_filters_with_options_and_adapters(
+    root: impl AsRef<Path>,
+    filters: &[ResourceFilter],
     from: SourceAlias,
     targets: &[Agent],
     options: PlanOptions,
@@ -448,7 +476,7 @@ pub fn plan_filtered_with_options_and_adapters(
         adapters,
     )?;
     let state = load_state(root)?;
-    let sources = select_sources(&scan.normalized, &filter, from)?;
+    let sources = select_sources_for_filters(&scan.normalized, filters, from)?;
     let mut actions = Vec::new();
     let mut diagnostics = Vec::new();
     for source in sources {
@@ -671,6 +699,48 @@ fn select_sources<'a>(
     filter: &ResourceFilter,
     from: SourceAlias,
 ) -> Result<Vec<&'a NormalizedResource>, AgentSyncError> {
+    let selected = select_sources_for_filter(resources, filter, from);
+    if selected.is_empty() {
+        let suffix = filter
+            .name
+            .as_ref()
+            .map(|name| format!(" named {name:?}"))
+            .unwrap_or_default();
+        Err(AgentSyncError::InvalidArgument(format!(
+            "requested source resource{} was not found",
+            suffix
+        )))
+    } else {
+        Ok(selected)
+    }
+}
+
+fn select_sources_for_filters<'a>(
+    resources: &'a [NormalizedResource],
+    filters: &[ResourceFilter],
+    from: SourceAlias,
+) -> Result<Vec<&'a NormalizedResource>, AgentSyncError> {
+    if let [filter] = filters {
+        return select_sources(resources, filter, from);
+    }
+    let mut selected = Vec::new();
+    for filter in filters {
+        selected.extend(select_sources_for_filter(resources, filter, from));
+    }
+    if selected.is_empty() {
+        Err(AgentSyncError::InvalidArgument(
+            "requested source resources were not found".to_string(),
+        ))
+    } else {
+        Ok(selected)
+    }
+}
+
+fn select_sources_for_filter<'a>(
+    resources: &'a [NormalizedResource],
+    filter: &ResourceFilter,
+    from: SourceAlias,
+) -> Vec<&'a NormalizedResource> {
     let kind = match filter.selector {
         ResourceSelector::Rules => ResourceKind::RuleSet,
         ResourceSelector::Skills => ResourceKind::Skill,
@@ -701,19 +771,7 @@ fn select_sources<'a>(
     if filter.selector == ResourceSelector::Rules && filter.name.is_none() {
         selected.truncate(1);
     }
-    if selected.is_empty() {
-        let suffix = filter
-            .name
-            .as_ref()
-            .map(|name| format!(" named {name:?}"))
-            .unwrap_or_default();
-        Err(AgentSyncError::InvalidArgument(format!(
-            "requested source resource{} was not found",
-            suffix
-        )))
-    } else {
-        Ok(selected)
-    }
+    selected
 }
 
 fn resource_matches_name(resource: &NormalizedResource, name: &str) -> bool {
