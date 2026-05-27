@@ -65,11 +65,7 @@ pub const HOOK_EVENT_EQUIVALENCE: &[HookEquivalence] = &[
                 "tool.execute.before",
                 "requires a generated plugin wrapper and payload adapter",
             ),
-            report_only(
-                Agent::CursorCli,
-                None,
-                "Cursor CLI has no documented hook surface",
-            ),
+            direct(Agent::CursorCli, "preToolUse"),
         ],
     },
     HookEquivalence {
@@ -83,11 +79,7 @@ pub const HOOK_EVENT_EQUIVALENCE: &[HookEquivalence] = &[
                 "tool.execute.after",
                 "requires a generated plugin wrapper and payload adapter",
             ),
-            report_only(
-                Agent::CursorCli,
-                None,
-                "Cursor CLI has no documented hook surface",
-            ),
+            direct(Agent::CursorCli, "postToolUse"),
         ],
     },
     HookEquivalence {
@@ -104,7 +96,7 @@ pub const HOOK_EVENT_EQUIVALENCE: &[HookEquivalence] = &[
             report_only(
                 Agent::CursorCli,
                 None,
-                "Cursor CLI exposes permissions, not hooks",
+                "Cursor has permission-capable before hooks but no direct PermissionRequest event",
             ),
         ],
     },
@@ -119,11 +111,7 @@ pub const HOOK_EVENT_EQUIVALENCE: &[HookEquivalence] = &[
                 "session.created",
                 "startup source and payload shape differ",
             ),
-            report_only(
-                Agent::CursorCli,
-                None,
-                "Cursor CLI has no documented hook surface",
-            ),
+            direct(Agent::CursorCli, "sessionStart"),
         ],
     },
     HookEquivalence {
@@ -137,11 +125,7 @@ pub const HOOK_EVENT_EQUIVALENCE: &[HookEquivalence] = &[
                 Some("tui.prompt.append"),
                 "not equivalent to a submitted prompt interception hook",
             ),
-            report_only(
-                Agent::CursorCli,
-                None,
-                "Cursor CLI has no documented hook surface",
-            ),
+            direct(Agent::CursorCli, "beforeSubmitPrompt"),
         ],
     },
     HookEquivalence {
@@ -155,11 +139,7 @@ pub const HOOK_EVENT_EQUIVALENCE: &[HookEquivalence] = &[
                 "experimental.session.compacting",
                 "experimental plugin hook; wrapper must adapt payload and output",
             ),
-            report_only(
-                Agent::CursorCli,
-                None,
-                "Cursor CLI has no documented hook surface",
-            ),
+            direct(Agent::CursorCli, "preCompact"),
         ],
     },
     HookEquivalence {
@@ -176,7 +156,7 @@ pub const HOOK_EVENT_EQUIVALENCE: &[HookEquivalence] = &[
             report_only(
                 Agent::CursorCli,
                 None,
-                "Cursor CLI has no documented hook surface",
+                "Cursor documents preCompact but no post-compaction hook",
             ),
         ],
     },
@@ -191,11 +171,7 @@ pub const HOOK_EVENT_EQUIVALENCE: &[HookEquivalence] = &[
                 None,
                 "no documented equivalent plugin event",
             ),
-            report_only(
-                Agent::CursorCli,
-                None,
-                "Cursor CLI has no documented hook surface",
-            ),
+            direct(Agent::CursorCli, "subagentStart"),
         ],
     },
     HookEquivalence {
@@ -209,11 +185,7 @@ pub const HOOK_EVENT_EQUIVALENCE: &[HookEquivalence] = &[
                 None,
                 "no documented equivalent plugin event",
             ),
-            report_only(
-                Agent::CursorCli,
-                None,
-                "Cursor CLI has no documented hook surface",
-            ),
+            direct(Agent::CursorCli, "subagentStop"),
         ],
     },
     HookEquivalence {
@@ -227,11 +199,7 @@ pub const HOOK_EVENT_EQUIVALENCE: &[HookEquivalence] = &[
                 Some("session.idle"),
                 "session idle is observable but not equivalent to a blocking stop hook",
             ),
-            report_only(
-                Agent::CursorCli,
-                None,
-                "Cursor CLI has no documented hook surface",
-            ),
+            direct(Agent::CursorCli, "stop"),
         ],
     },
 ];
@@ -248,7 +216,7 @@ pub const HOOK_TOOL_EQUIVALENCE: &[HookEquivalence] = &[
                 "bash",
                 "OpenCode plugin wrapper must adapt args.command into JSON hook stdin",
             ),
-            report_only(Agent::CursorCli, None, "Cursor CLI has no documented hook matcher surface"),
+            direct(Agent::CursorCli, "Shell"),
         ],
     },
     HookEquivalence {
@@ -262,7 +230,7 @@ pub const HOOK_TOOL_EQUIVALENCE: &[HookEquivalence] = &[
                 "read",
                 "OpenCode plugin wrapper must adapt args.filePath into JSON hook stdin",
             ),
-            report_only(Agent::CursorCli, None, "Cursor CLI has no documented hook matcher surface"),
+            direct(Agent::CursorCli, "Read"),
         ],
     },
     HookEquivalence {
@@ -276,7 +244,7 @@ pub const HOOK_TOOL_EQUIVALENCE: &[HookEquivalence] = &[
                 "grep",
                 "OpenCode plugin wrapper must adapt grep arguments into JSON hook stdin",
             ),
-            report_only(Agent::CursorCli, None, "Cursor CLI has no documented hook matcher surface"),
+            direct(Agent::CursorCli, "Grep"),
         ],
     },
     HookEquivalence {
@@ -290,7 +258,11 @@ pub const HOOK_TOOL_EQUIVALENCE: &[HookEquivalence] = &[
                 "glob",
                 "OpenCode plugin wrapper must adapt glob arguments into JSON hook stdin",
             ),
-            report_only(Agent::CursorCli, None, "Cursor CLI has no documented hook matcher surface"),
+            report_only(
+                Agent::CursorCli,
+                None,
+                "Cursor hooks do not document a Glob tool matcher",
+            ),
         ],
     },
     HookEquivalence {
@@ -304,7 +276,7 @@ pub const HOOK_TOOL_EQUIVALENCE: &[HookEquivalence] = &[
                 "edit|write|apply_patch",
                 "OpenCode uses lowercase tools and different edit/patch argument shapes",
             ),
-            report_only(Agent::CursorCli, None, "Cursor CLI has no documented hook matcher surface"),
+            direct(Agent::CursorCli, "Write"),
         ],
     },
     HookEquivalence {
@@ -318,7 +290,11 @@ pub const HOOK_TOOL_EQUIVALENCE: &[HookEquivalence] = &[
                 "webfetch",
                 "OpenCode plugin wrapper must adapt webfetch arguments into JSON hook stdin",
             ),
-            report_only(Agent::CursorCli, None, "Cursor CLI has no documented hook matcher surface"),
+            report_only(
+                Agent::CursorCli,
+                None,
+                "Cursor hooks do not document a WebFetch tool matcher",
+            ),
         ],
     },
     HookEquivalence {
@@ -332,7 +308,11 @@ pub const HOOK_TOOL_EQUIVALENCE: &[HookEquivalence] = &[
                 "websearch",
                 "OpenCode plugin wrapper must adapt websearch arguments into JSON hook stdin",
             ),
-            report_only(Agent::CursorCli, None, "Cursor CLI has no documented hook matcher surface"),
+            report_only(
+                Agent::CursorCli,
+                None,
+                "Cursor hooks do not document a WebSearch tool matcher",
+            ),
         ],
     },
     HookEquivalence {
@@ -342,7 +322,7 @@ pub const HOOK_TOOL_EQUIVALENCE: &[HookEquivalence] = &[
             direct(Agent::Codex, "spawn_agent|Agent"),
             direct(Agent::Claude, "Agent"),
             report_only(Agent::OpenCode, None, "no stable documented equivalent tool matcher"),
-            report_only(Agent::CursorCli, None, "Cursor CLI has no documented hook matcher surface"),
+            direct(Agent::CursorCli, "Task"),
         ],
     },
     HookEquivalence {
@@ -356,7 +336,11 @@ pub const HOOK_TOOL_EQUIVALENCE: &[HookEquivalence] = &[
                 "<server>_<tool>",
                 "OpenCode permission docs use server_tool wildcards; verify plugin input.tool before rendering",
             ),
-            report_only(Agent::CursorCli, None, "Cursor CLI supports MCP but has no documented hook matcher surface"),
+            report_only(
+                Agent::CursorCli,
+                Some("MCP:<tool_name>"),
+                "Cursor uses MCP:<tool_name>; AgentSync does not yet normalize server/tool names safely",
+            ),
         ],
     },
 ];
@@ -413,6 +397,11 @@ mod tests {
                 && mapping.native == Some("tool.execute.before")
                 && mapping.support == HookMappingSupport::ShimRequired
         }));
+        assert!(policy.mappings.iter().any(|mapping| {
+            mapping.agent == Agent::CursorCli
+                && mapping.native == Some("preToolUse")
+                && mapping.support == HookMappingSupport::Direct
+        }));
     }
 
     #[test]
@@ -429,6 +418,11 @@ mod tests {
                 && mapping.native == Some("Write|Edit|MultiEdit")
                 && mapping.support == HookMappingSupport::Direct
         }));
+        assert!(policy.mappings.iter().any(|mapping| {
+            mapping.agent == Agent::CursorCli
+                && mapping.native == Some("Write")
+                && mapping.support == HookMappingSupport::Direct
+        }));
     }
 
     #[test]
@@ -443,17 +437,39 @@ mod tests {
     }
 
     #[test]
-    fn cursor_cli_hook_policy_is_report_only() {
-        for policy in HOOK_EVENT_EQUIVALENCE
+    fn cursor_cli_hook_policy_marks_direct_and_report_only_boundaries() {
+        let direct_event = hook_event_equivalence("tool.before")
+            .unwrap()
+            .mappings
             .iter()
-            .chain(HOOK_TOOL_EQUIVALENCE.iter())
-        {
-            let cursor = policy
-                .mappings
-                .iter()
-                .find(|mapping| mapping.agent == Agent::CursorCli)
-                .unwrap();
-            assert_eq!(cursor.support, HookMappingSupport::ReportOnly);
-        }
+            .find(|mapping| mapping.agent == Agent::CursorCli)
+            .unwrap();
+        assert_eq!(direct_event.native, Some("preToolUse"));
+        assert_eq!(direct_event.support, HookMappingSupport::Direct);
+
+        let direct_tool = hook_tool_equivalence("tool.shell")
+            .unwrap()
+            .mappings
+            .iter()
+            .find(|mapping| mapping.agent == Agent::CursorCli)
+            .unwrap();
+        assert_eq!(direct_tool.native, Some("Shell"));
+        assert_eq!(direct_tool.support, HookMappingSupport::Direct);
+
+        let report_only_event = hook_event_equivalence("permission.request")
+            .unwrap()
+            .mappings
+            .iter()
+            .find(|mapping| mapping.agent == Agent::CursorCli)
+            .unwrap();
+        assert_eq!(report_only_event.support, HookMappingSupport::ReportOnly);
+
+        let report_only_tool = hook_tool_equivalence("tool.file.glob")
+            .unwrap()
+            .mappings
+            .iter()
+            .find(|mapping| mapping.agent == Agent::CursorCli)
+            .unwrap();
+        assert_eq!(report_only_tool.support, HookMappingSupport::ReportOnly);
     }
 }

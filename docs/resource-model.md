@@ -36,12 +36,13 @@ rendering target files or updating state. OpenCode command files and
 `opencode.json` / `opencode.jsonc` command config are discovered as blocked
 command resources.
 
-Hooks follow the same safety model. Claude settings files and Codex
-`.codex/hooks.json` files with a top-level `hooks` field are discovered as hook
-resources. Hook conversion uses the entry-by-entry policy in
-`docs/hook-equivalence-policy.md`: directly equivalent Codex/Claude command
-hooks are partial render candidates, shim-required entries need generated
-adapters, and report-only entries remain diagnostics/native extensions.
+Hooks follow the same safety model. Claude settings files, Codex
+`.codex/hooks.json` files, and Cursor `.cursor/hooks.json` files with a
+top-level `hooks` field are discovered as hook resources. Hook conversion uses
+the entry-by-entry policy in `docs/hook-equivalence-policy.md`: directly
+equivalent Codex/Claude/Cursor command hooks are partial render candidates,
+shim-required entries need generated adapters, and report-only entries remain
+diagnostics/native extensions.
 
 Blocked behavioral resources preserve their raw native file text in native
 extensions so scan/status output can surface what was blocked without rendering

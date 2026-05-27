@@ -492,3 +492,41 @@ fn scan_json_includes_codex_hook_config_as_structured_partial_behavior() {
         .any(|diagnostic| diagnostic["message"]
             == "hook.PreToolUse: executable hook behavior requires compatibility mapping"));
 }
+
+#[test]
+fn scan_json_includes_cursor_hook_config_as_structured_partial_behavior() {
+    let dir = tempdir().unwrap();
+    fs::create_dir_all(dir.path().join(".cursor")).unwrap();
+    fs::write(
+        dir.path().join(".cursor/hooks.json"),
+        r#"{"version":1,"hooks":{"preToolUse":[{"matcher":"Shell","command":".cursor/hooks/check.sh"}]}}"#,
+    )
+    .unwrap();
+
+    let output = Command::cargo_bin("agentsync")
+        .unwrap()
+        .current_dir(dir.path())
+        .args(["scan", "--format", "json"])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let json: Value = serde_json::from_slice(&output).unwrap();
+    let hook = json["normalized"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|resource| resource["id"] == "hooks:cursor:.cursor/hooks.json")
+        .unwrap();
+
+    assert_eq!(hook["kind"], "hook");
+    assert_eq!(hook["support"], "partial");
+    assert!(hook["native_extensions"]["behavior.fields"]["hooks"]["preToolUse"].is_array());
+    assert!(hook["diagnostics"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|diagnostic| diagnostic["message"]
+            == "hook.preToolUse: executable hook behavior requires compatibility mapping"));
+}

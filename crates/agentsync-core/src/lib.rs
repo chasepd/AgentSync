@@ -414,6 +414,7 @@ fn suggested_diff_command(resource: &NormalizedResource, entry: &StateResource) 
             | ResourceKind::Skill
             | ResourceKind::Subagent
             | ResourceKind::Command
+            | ResourceKind::Hook
     ) {
         return None;
     }
@@ -583,8 +584,11 @@ pub fn plan_filters_with_options_and_adapters(
             }
             if source.kind == ResourceKind::Hook
                 && (source.support == SupportLevel::Blocked
-                    || !matches!(source.source_agent, Agent::Codex | Agent::Claude)
-                    || !matches!(*target, Agent::Codex | Agent::Claude))
+                    || !matches!(
+                        source.source_agent,
+                        Agent::Codex | Agent::Claude | Agent::CursorCli
+                    )
+                    || !matches!(*target, Agent::Codex | Agent::Claude | Agent::CursorCli))
             {
                 diagnostics.extend(source.diagnostics.clone());
                 actions.push(block_action(source, *target, "non-portable"));
@@ -1115,7 +1119,7 @@ fn merge_rendered_hook_config(
     if source.kind != ResourceKind::Hook {
         return Ok(());
     }
-    if !matches!(target, Agent::Codex | Agent::Claude) {
+    if !matches!(target, Agent::Codex | Agent::Claude | Agent::CursorCli) {
         return Ok(());
     }
     let abs = root.join(&file.path);
@@ -1179,6 +1183,11 @@ fn merge_rendered_hook_config(
         });
     };
 
+    if target == Agent::CursorCli && !object.contains_key("version") {
+        if let Some(version) = rendered.get("version").cloned() {
+            object.insert("version".to_string(), version);
+        }
+    }
     object.insert("hooks".to_string(), rendered_hooks);
     file.contents = format!(
         "{}\n",
@@ -2120,7 +2129,7 @@ mod tests {
             dir.path(),
             ResourceSelector::Hooks,
             SourceAlias::Claude,
-            &[Agent::CursorCli],
+            &[Agent::OpenCode],
         )
         .unwrap();
 
@@ -2330,7 +2339,7 @@ mod tests {
             dir.path(),
             ResourceFilter::all(ResourceSelector::Hooks),
             SourceAlias::Claude,
-            &[Agent::CursorCli],
+            &[Agent::OpenCode],
             PlanOptions {
                 strategy: ConflictStrategy::Source,
                 ..PlanOptions::default()
@@ -3072,6 +3081,110 @@ mod tests {
     }
 
     #[test]
+    fn hook_plan_renders_codex_hooks_to_cursor() {
+        let dir = tempdir().unwrap();
+        fs::create_dir_all(dir.path().join(".codex")).unwrap();
+        fs::write(
+            dir.path().join(".codex/hooks.json"),
+            r#"{"hooks":{"PreToolUse":[{"matcher":"apply_patch","hooks":[{"type":"command","command":"echo write","timeout":5,"statusMessage":"Checking"}]},{"matcher":"exec_command","hooks":[{"type":"command","command":"echo shell"}]}],"UserPromptSubmit":[{"hooks":[{"type":"command","command":"echo prompt"}]}]}}"#,
+        )
+        .unwrap();
+
+        let report = plan(
+            dir.path(),
+            ResourceSelector::Hooks,
+            SourceAlias::Codex,
+            &[Agent::CursorCli],
+        )
+        .unwrap();
+
+        assert_eq!(report.actions[0].action, PlanActionKind::Create);
+        let rendered = report.actions[0].rendered.as_ref().unwrap();
+        assert_eq!(rendered.path, Path::new(".cursor/hooks.json"));
+        let json: serde_json::Value = serde_json::from_str(&rendered.contents).unwrap();
+        assert_eq!(json["version"], 1);
+        assert_eq!(json["hooks"]["preToolUse"][0]["matcher"], "Write");
+        assert_eq!(json["hooks"]["preToolUse"][0]["command"], "echo write");
+        assert_eq!(json["hooks"]["preToolUse"][0]["timeout"], 5);
+        assert!(json["hooks"]["preToolUse"][0]
+            .get("statusMessage")
+            .is_none());
+        assert_eq!(json["hooks"]["preToolUse"][1]["matcher"], "Shell");
+        assert_eq!(
+            json["hooks"]["beforeSubmitPrompt"][0]["command"],
+            "echo prompt"
+        );
+        assert!(report.diagnostics.iter().any(|diagnostic| diagnostic
+            .message
+            .contains("omitted statusMessage because Cursor hook definitions do not support it")));
+    }
+
+    #[test]
+    fn hook_plan_renders_cursor_hooks_to_codex() {
+        let dir = tempdir().unwrap();
+        fs::create_dir_all(dir.path().join(".cursor")).unwrap();
+        fs::write(
+            dir.path().join(".cursor/hooks.json"),
+            r#"{"version":1,"hooks":{"preToolUse":[{"matcher":"Shell","command":"echo shell"},{"matcher":"Write","command":"echo write"}],"stop":[{"command":"echo stop"}]}}"#,
+        )
+        .unwrap();
+
+        let report = plan(
+            dir.path(),
+            ResourceSelector::Hooks,
+            SourceAlias::CursorCli,
+            &[Agent::Codex],
+        )
+        .unwrap();
+
+        assert_eq!(report.actions[0].action, PlanActionKind::Create);
+        let rendered = report.actions[0].rendered.as_ref().unwrap();
+        assert_eq!(rendered.path, Path::new(".codex/hooks.json"));
+        let json: serde_json::Value = serde_json::from_str(&rendered.contents).unwrap();
+        assert_eq!(
+            json["hooks"]["PreToolUse"][0]["matcher"],
+            "Bash|exec_command"
+        );
+        assert_eq!(
+            json["hooks"]["PreToolUse"][0]["hooks"][0]["command"],
+            "echo shell"
+        );
+        assert_eq!(
+            json["hooks"]["PreToolUse"][1]["matcher"],
+            "apply_patch|Write|Edit"
+        );
+        assert_eq!(json["hooks"]["Stop"][0]["hooks"][0]["command"], "echo stop");
+    }
+
+    #[test]
+    fn hook_plan_omits_cursor_only_events_when_targeting_claude() {
+        let dir = tempdir().unwrap();
+        fs::create_dir_all(dir.path().join(".cursor")).unwrap();
+        fs::write(
+            dir.path().join(".cursor/hooks.json"),
+            r#"{"version":1,"hooks":{"afterFileEdit":[{"command":"echo edit"}],"preToolUse":[{"matcher":"Read","command":"echo read"}]}}"#,
+        )
+        .unwrap();
+
+        let report = plan(
+            dir.path(),
+            ResourceSelector::Hooks,
+            SourceAlias::CursorCli,
+            &[Agent::Claude],
+        )
+        .unwrap();
+
+        assert_eq!(report.actions[0].action, PlanActionKind::Create);
+        let rendered = report.actions[0].rendered.as_ref().unwrap();
+        let json: serde_json::Value = serde_json::from_str(&rendered.contents).unwrap();
+        assert_eq!(json["hooks"]["PreToolUse"][0]["matcher"], "Read");
+        assert!(!rendered.contents.contains("echo edit"));
+        assert!(report.diagnostics.iter().any(|diagnostic| diagnostic
+            .message
+            .contains("hook.afterFileEdit: report-only; no direct event mapping to claude")));
+    }
+
+    #[test]
     fn hook_plan_omits_unsupported_matcher_and_keeps_supported_groups() {
         let dir = tempdir().unwrap();
         fs::create_dir_all(dir.path().join(".claude")).unwrap();
@@ -3150,7 +3263,7 @@ mod tests {
             dir.path(),
             ResourceSelector::Hooks,
             SourceAlias::Claude,
-            &[Agent::CursorCli],
+            &[Agent::OpenCode],
         )
         .unwrap();
 

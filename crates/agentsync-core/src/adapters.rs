@@ -271,6 +271,15 @@ impl AgentAdapter for CursorCliAdapter {
             [".cursor/skills"],
             scope,
         );
+        discover_json_key_files(
+            &mut resources,
+            root,
+            self.agent(),
+            ResourceKind::Hook,
+            [".cursor/hooks.json"],
+            "hooks",
+            scope,
+        );
         Ok(resources)
     }
 
@@ -427,7 +436,7 @@ fn portable_capabilities(agent: Agent) -> AdapterCapabilities {
     resources.insert(ResourceKind::Subagent, SupportLevel::Partial);
     resources.insert(
         ResourceKind::Hook,
-        if matches!(agent, Agent::Codex | Agent::Claude) {
+        if matches!(agent, Agent::Codex | Agent::Claude | Agent::CursorCli) {
             SupportLevel::Partial
         } else {
             SupportLevel::Blocked
@@ -1412,8 +1421,10 @@ fn blocked_behavior(root: &Path, native: &NativeResource) -> NormalizedResource 
         resource_kind: Some(native.kind),
         agent: Some(native.agent),
         message: if native.kind == ResourceKind::Hook
-            && matches!(native.agent, Agent::Codex | Agent::Claude)
-        {
+            && matches!(
+                native.agent,
+                Agent::Codex | Agent::Claude | Agent::CursorCli
+            ) {
             "hook resource is partially supported; unsupported entries remain report-only"
                 .to_string()
         } else {
@@ -1437,7 +1448,10 @@ fn blocked_behavior(root: &Path, native: &NativeResource) -> NormalizedResource 
         }),
     }
     let support = if native.kind == ResourceKind::Hook
-        && matches!(native.agent, Agent::Codex | Agent::Claude)
+        && matches!(
+            native.agent,
+            Agent::Codex | Agent::Claude | Agent::CursorCli
+        )
         && native_extensions.contains_key("behavior.fields")
     {
         SupportLevel::Partial
@@ -1467,7 +1481,7 @@ fn add_behavior_diagnostics(
     diagnostics: &mut Vec<Diagnostic>,
 ) {
     let keys = match (native.agent, native.kind) {
-        (Agent::Codex, ResourceKind::Hook) | (Agent::Claude, ResourceKind::Hook) => &["hooks"][..],
+        (Agent::Codex | Agent::Claude | Agent::CursorCli, ResourceKind::Hook) => &["hooks"][..],
         (Agent::Claude, ResourceKind::Permission) => &["permissions"][..],
         (Agent::OpenCode, ResourceKind::Permission) => &["permission"][..],
         _ => &[][..],
@@ -1981,167 +1995,104 @@ fn render_hook(
     resource: &NormalizedResource,
     target: Agent,
 ) -> Result<(Vec<RenderedFile>, Vec<Diagnostic>), AgentSyncError> {
-    if !matches!(resource.source_agent, Agent::Codex | Agent::Claude)
-        || !matches!(target, Agent::Codex | Agent::Claude)
-    {
+    if !is_direct_hook_agent(resource.source_agent) || !is_direct_hook_agent(target) {
         return Err(AgentSyncError::InvalidArgument(
-            "hook rendering is currently supported only between Codex and Claude targets"
+            "hook rendering is currently supported only between Codex, Claude, and Cursor targets"
                 .to_string(),
         ));
     }
 
-    let hooks = resource
-        .native_extensions
-        .get("behavior.fields")
-        .and_then(|fields| fields.get("hooks"))
-        .and_then(Value::as_object)
-        .ok_or_else(|| AgentSyncError::Adapter("missing hook behavior fields".to_string()))?;
-
-    let mut diagnostics = Vec::new();
-    let mut rendered_hooks = serde_json::Map::new();
+    let (entries, mut diagnostics, mut omitted_entries) = collect_hook_entries(resource)?;
     let mut rendered_handlers = 0usize;
-    let mut omitted_entries = 0usize;
+    let mut cursor_hooks = BTreeMap::<String, Vec<Value>>::new();
+    let mut nested_hooks = BTreeMap::<String, BTreeMap<Option<String>, Vec<Value>>>::new();
 
-    for (event, groups) in hooks {
-        let Some(target_event) = render_hook_event_name(event, resource.source_agent, target)
+    for entry in entries {
+        let Some(target_event) =
+            render_hook_event_name(&entry.event, resource.source_agent, target)
         else {
             omitted_entries += 1;
             diagnostics.push(hook_render_diagnostic(
                 resource,
                 target,
                 &format!(
-                    "hook.{event}: report-only; no direct event mapping to {}",
+                    "hook.{}: report-only; no direct event mapping to {}",
+                    entry.event,
                     target.as_str()
                 ),
             ));
             continue;
         };
 
-        let Some(groups) = groups.as_array() else {
-            omitted_entries += 1;
-            diagnostics.push(hook_render_diagnostic(
-                resource,
-                target,
-                &format!("hook.{event}: omitted because event groups are not an array"),
-            ));
-            continue;
+        let matcher = match entry.matcher.as_deref() {
+            Some(matcher) => match render_hook_matcher(matcher, resource.source_agent, target) {
+                Ok(matcher) => matcher,
+                Err(message) => {
+                    omitted_entries += 1;
+                    diagnostics.push(hook_render_diagnostic(
+                        resource,
+                        target,
+                        &format!("{}: {message}", entry.location),
+                    ));
+                    continue;
+                }
+            },
+            None => None,
         };
 
-        let mut rendered_groups = Vec::new();
-        for (group_index, group) in groups.iter().enumerate() {
-            let Some(group) = group.as_object() else {
-                omitted_entries += 1;
-                diagnostics.push(hook_render_diagnostic(
-                    resource,
-                    target,
-                    &format!("hook.{event}[{group_index}]: omitted because group is not an object"),
-                ));
-                continue;
-            };
-            let unsupported_group_keys = group
-                .keys()
-                .filter(|key| !matches!(key.as_str(), "matcher" | "hooks"))
-                .cloned()
-                .collect::<Vec<_>>();
-            if !unsupported_group_keys.is_empty() {
-                omitted_entries += 1;
-                diagnostics.push(hook_render_diagnostic(
-                    resource,
-                    target,
-                    &format!(
-                        "hook.{event}[{group_index}]: omitted unsupported group fields: {}",
-                        unsupported_group_keys.join(", ")
-                    ),
-                ));
-                continue;
-            }
-
-            let matcher = match group.get("matcher") {
-                Some(matcher) => {
-                    let Some(matcher) = matcher.as_str() else {
-                        omitted_entries += 1;
-                        diagnostics.push(hook_render_diagnostic(
-                            resource,
-                            target,
-                            &format!(
-                                "hook.{event}[{group_index}]: omitted because matcher is not a string"
-                            ),
-                        ));
-                        continue;
-                    };
-                    match render_hook_matcher(matcher, resource.source_agent, target) {
-                        Ok(matcher) => matcher,
-                        Err(message) => {
-                            omitted_entries += 1;
-                            diagnostics.push(hook_render_diagnostic(
-                                resource,
-                                target,
-                                &format!("hook.{event}[{group_index}]: {message}"),
-                            ));
-                            continue;
+        let handler = match render_hook_handler(&entry.handler, target) {
+            Ok((Some(mut handler), warnings)) => {
+                rendered_handlers += 1;
+                for warning in warnings {
+                    omitted_entries += 1;
+                    diagnostics.push(hook_render_diagnostic(
+                        resource,
+                        target,
+                        &format!("{}: {warning}", entry.location),
+                    ));
+                }
+                if target == Agent::CursorCli {
+                    if let Some(matcher) = matcher.clone() {
+                        if let Some(object) = handler.as_object_mut() {
+                            object.insert("matcher".to_string(), Value::String(matcher));
                         }
                     }
                 }
-                None => None,
-            };
-            let Some(handlers) = group.get("hooks").and_then(Value::as_array) else {
+                handler
+            }
+            Ok((None, _)) => {
                 omitted_entries += 1;
                 diagnostics.push(hook_render_diagnostic(
                     resource,
                     target,
-                    &format!("hook.{event}[{group_index}]: omitted because hooks are not an array"),
+                    &format!("{}: omitted unsupported hook handler", entry.location),
                 ));
                 continue;
-            };
-
-            let mut rendered_group_handlers = Vec::new();
-            for (handler_index, handler) in handlers.iter().enumerate() {
-                match render_hook_handler(handler) {
-                    Ok(Some(handler)) => {
-                        rendered_handlers += 1;
-                        rendered_group_handlers.push(handler);
-                    }
-                    Ok(None) => {
-                        omitted_entries += 1;
-                        diagnostics.push(hook_render_diagnostic(
-                            resource,
-                            target,
-                            &format!(
-                                "hook.{event}[{group_index}].hooks[{handler_index}]: omitted unsupported hook handler"
-                            ),
-                        ));
-                    }
-                    Err(message) => {
-                        omitted_entries += 1;
-                        diagnostics.push(hook_render_diagnostic(
-                            resource,
-                            target,
-                            &format!(
-                                "hook.{event}[{group_index}].hooks[{handler_index}]: {message}"
-                            ),
-                        ));
-                    }
-                }
             }
-
-            if rendered_group_handlers.is_empty() && !handlers.is_empty() {
+            Err(message) => {
+                omitted_entries += 1;
+                diagnostics.push(hook_render_diagnostic(
+                    resource,
+                    target,
+                    &format!("{}: {message}", entry.location),
+                ));
                 continue;
             }
+        };
 
-            let mut rendered_group = serde_json::Map::new();
-            if let Some(matcher) = matcher {
-                rendered_group.insert("matcher".to_string(), Value::String(matcher));
-            }
-            rendered_group.insert("hooks".to_string(), Value::Array(rendered_group_handlers));
-            rendered_groups.push(Value::Object(rendered_group));
-        }
-
-        if !rendered_groups.is_empty() || groups.is_empty() {
-            rendered_hooks.insert(target_event.to_string(), Value::Array(rendered_groups));
+        if target == Agent::CursorCli {
+            cursor_hooks.entry(target_event).or_default().push(handler);
+        } else {
+            nested_hooks
+                .entry(target_event)
+                .or_default()
+                .entry(matcher)
+                .or_default()
+                .push(handler);
         }
     }
 
-    if rendered_hooks.is_empty() {
+    if cursor_hooks.is_empty() && nested_hooks.is_empty() {
         diagnostics.push(hook_render_diagnostic(
             resource,
             target,
@@ -2154,17 +2105,15 @@ fn render_hook(
         resource,
         target,
         &format!(
-            "hook.render: rendered {rendered_handlers} command handler(s); omitted {omitted_entries} unsupported hook entries"
+            "hook.render: rendered {rendered_handlers} command handler(s); omitted {omitted_entries} unsupported hook item(s)"
         ),
     ));
 
-    let mut root = serde_json::Map::new();
-    root.insert("hooks".to_string(), Value::Object(rendered_hooks));
-    let contents = format!(
-        "{}\n",
-        serde_json::to_string_pretty(&Value::Object(root))
-            .map_err(|error| AgentSyncError::Adapter(error.to_string()))?
-    );
+    let contents = if target == Agent::CursorCli {
+        render_cursor_hook_contents(cursor_hooks)?
+    } else {
+        render_nested_hook_contents(nested_hooks)?
+    };
     Ok((
         vec![RenderedFile {
             path: hook_target_path(target),
@@ -2174,9 +2123,239 @@ fn render_hook(
     ))
 }
 
-fn render_hook_event_name(event: &str, source: Agent, target: Agent) -> Option<&str> {
+#[derive(Debug)]
+struct HookEntry {
+    event: String,
+    matcher: Option<String>,
+    handler: Value,
+    location: String,
+}
+
+fn collect_hook_entries(
+    resource: &NormalizedResource,
+) -> Result<(Vec<HookEntry>, Vec<Diagnostic>, usize), AgentSyncError> {
+    let hooks = resource
+        .native_extensions
+        .get("behavior.fields")
+        .and_then(|fields| fields.get("hooks"))
+        .and_then(Value::as_object)
+        .ok_or_else(|| AgentSyncError::Adapter("missing hook behavior fields".to_string()))?;
+
+    let mut diagnostics = Vec::new();
+    let mut entries = Vec::new();
+    let mut omitted_entries = 0usize;
+    for (event, groups) in hooks {
+        if resource.source_agent == Agent::CursorCli {
+            collect_cursor_hook_entries(
+                resource,
+                event,
+                groups,
+                &mut entries,
+                &mut diagnostics,
+                &mut omitted_entries,
+            );
+        } else {
+            collect_nested_hook_entries(
+                resource,
+                event,
+                groups,
+                &mut entries,
+                &mut diagnostics,
+                &mut omitted_entries,
+            );
+        }
+    }
+    Ok((entries, diagnostics, omitted_entries))
+}
+
+fn collect_cursor_hook_entries(
+    resource: &NormalizedResource,
+    event: &str,
+    handlers: &Value,
+    entries: &mut Vec<HookEntry>,
+    diagnostics: &mut Vec<Diagnostic>,
+    omitted_entries: &mut usize,
+) {
+    let Some(handlers) = handlers.as_array() else {
+        *omitted_entries += 1;
+        diagnostics.push(hook_render_diagnostic(
+            resource,
+            resource.source_agent,
+            &format!("hook.{event}: omitted because event handlers are not an array"),
+        ));
+        return;
+    };
+    for (handler_index, handler) in handlers.iter().enumerate() {
+        let location = format!("hook.{event}[{handler_index}]");
+        let Some(object) = handler.as_object() else {
+            *omitted_entries += 1;
+            diagnostics.push(hook_render_diagnostic(
+                resource,
+                resource.source_agent,
+                &format!("{location}: omitted because handler is not an object"),
+            ));
+            continue;
+        };
+        let matcher = match object.get("matcher") {
+            Some(matcher) => {
+                let Some(matcher) = matcher.as_str() else {
+                    *omitted_entries += 1;
+                    diagnostics.push(hook_render_diagnostic(
+                        resource,
+                        resource.source_agent,
+                        &format!("{location}: omitted because matcher is not a string"),
+                    ));
+                    continue;
+                };
+                Some(matcher.to_string())
+            }
+            None => None,
+        };
+        let mut handler = object.clone();
+        handler.remove("matcher");
+        entries.push(HookEntry {
+            event: event.to_string(),
+            matcher,
+            handler: Value::Object(handler),
+            location,
+        });
+    }
+}
+
+fn collect_nested_hook_entries(
+    resource: &NormalizedResource,
+    event: &str,
+    groups: &Value,
+    entries: &mut Vec<HookEntry>,
+    diagnostics: &mut Vec<Diagnostic>,
+    omitted_entries: &mut usize,
+) {
+    let Some(groups) = groups.as_array() else {
+        *omitted_entries += 1;
+        diagnostics.push(hook_render_diagnostic(
+            resource,
+            resource.source_agent,
+            &format!("hook.{event}: omitted because event groups are not an array"),
+        ));
+        return;
+    };
+
+    for (group_index, group) in groups.iter().enumerate() {
+        let group_location = format!("hook.{event}[{group_index}]");
+        let Some(group) = group.as_object() else {
+            *omitted_entries += 1;
+            diagnostics.push(hook_render_diagnostic(
+                resource,
+                resource.source_agent,
+                &format!("{group_location}: omitted because group is not an object"),
+            ));
+            continue;
+        };
+        let unsupported_group_keys = group
+            .keys()
+            .filter(|key| !matches!(key.as_str(), "matcher" | "hooks"))
+            .cloned()
+            .collect::<Vec<_>>();
+        if !unsupported_group_keys.is_empty() {
+            *omitted_entries += 1;
+            diagnostics.push(hook_render_diagnostic(
+                resource,
+                resource.source_agent,
+                &format!(
+                    "{group_location}: omitted unsupported group fields: {}",
+                    unsupported_group_keys.join(", ")
+                ),
+            ));
+            continue;
+        }
+
+        let matcher = match group.get("matcher") {
+            Some(matcher) => {
+                let Some(matcher) = matcher.as_str() else {
+                    *omitted_entries += 1;
+                    diagnostics.push(hook_render_diagnostic(
+                        resource,
+                        resource.source_agent,
+                        &format!("{group_location}: omitted because matcher is not a string"),
+                    ));
+                    continue;
+                };
+                Some(matcher.to_string())
+            }
+            None => None,
+        };
+        let Some(handlers) = group.get("hooks").and_then(Value::as_array) else {
+            *omitted_entries += 1;
+            diagnostics.push(hook_render_diagnostic(
+                resource,
+                resource.source_agent,
+                &format!("{group_location}: omitted because hooks are not an array"),
+            ));
+            continue;
+        };
+
+        for (handler_index, handler) in handlers.iter().enumerate() {
+            entries.push(HookEntry {
+                event: event.to_string(),
+                matcher: matcher.clone(),
+                handler: handler.clone(),
+                location: format!("{group_location}.hooks[{handler_index}]"),
+            });
+        }
+    }
+}
+
+fn render_cursor_hook_contents(
+    hooks: BTreeMap<String, Vec<Value>>,
+) -> Result<String, AgentSyncError> {
+    let mut rendered_hooks = serde_json::Map::new();
+    for (event, handlers) in hooks {
+        rendered_hooks.insert(event, Value::Array(handlers));
+    }
+    let mut root = serde_json::Map::new();
+    root.insert("version".to_string(), Value::Number(1.into()));
+    root.insert("hooks".to_string(), Value::Object(rendered_hooks));
+    let contents = format!(
+        "{}\n",
+        serde_json::to_string_pretty(&Value::Object(root))
+            .map_err(|error| AgentSyncError::Adapter(error.to_string()))?
+    );
+    Ok(contents)
+}
+
+fn render_nested_hook_contents(
+    hooks: BTreeMap<String, BTreeMap<Option<String>, Vec<Value>>>,
+) -> Result<String, AgentSyncError> {
+    let mut rendered_hooks = serde_json::Map::new();
+    for (event, groups) in hooks {
+        let mut rendered_groups = Vec::new();
+        for (matcher, handlers) in groups {
+            let mut rendered_group = serde_json::Map::new();
+            if let Some(matcher) = matcher {
+                rendered_group.insert("matcher".to_string(), Value::String(matcher));
+            }
+            rendered_group.insert("hooks".to_string(), Value::Array(handlers));
+            rendered_groups.push(Value::Object(rendered_group));
+        }
+        rendered_hooks.insert(event, Value::Array(rendered_groups));
+    }
+    let mut root = serde_json::Map::new();
+    root.insert("hooks".to_string(), Value::Object(rendered_hooks));
+    let contents = format!(
+        "{}\n",
+        serde_json::to_string_pretty(&Value::Object(root))
+            .map_err(|error| AgentSyncError::Adapter(error.to_string()))?
+    );
+    Ok(contents)
+}
+
+fn is_direct_hook_agent(agent: Agent) -> bool {
+    matches!(agent, Agent::Codex | Agent::Claude | Agent::CursorCli)
+}
+
+fn render_hook_event_name(event: &str, source: Agent, target: Agent) -> Option<String> {
     if source == target {
-        return Some(event);
+        return Some(event.to_string());
     }
     match (source, target, event) {
         (Agent::Codex | Agent::Claude, Agent::Codex | Agent::Claude, "PreToolUse")
@@ -2188,7 +2367,53 @@ fn render_hook_event_name(event: &str, source: Agent, target: Agent) -> Option<&
         | (Agent::Codex | Agent::Claude, Agent::Codex | Agent::Claude, "UserPromptSubmit")
         | (Agent::Codex | Agent::Claude, Agent::Codex | Agent::Claude, "SubagentStart")
         | (Agent::Codex | Agent::Claude, Agent::Codex | Agent::Claude, "SubagentStop")
-        | (Agent::Codex | Agent::Claude, Agent::Codex | Agent::Claude, "Stop") => Some(event),
+        | (Agent::Codex | Agent::Claude, Agent::Codex | Agent::Claude, "Stop") => {
+            Some(event.to_string())
+        }
+        (Agent::Codex | Agent::Claude, Agent::CursorCli, "PreToolUse") => {
+            Some("preToolUse".to_string())
+        }
+        (Agent::Codex | Agent::Claude, Agent::CursorCli, "PostToolUse") => {
+            Some("postToolUse".to_string())
+        }
+        (Agent::Codex | Agent::Claude, Agent::CursorCli, "SessionStart") => {
+            Some("sessionStart".to_string())
+        }
+        (Agent::Codex | Agent::Claude, Agent::CursorCli, "UserPromptSubmit") => {
+            Some("beforeSubmitPrompt".to_string())
+        }
+        (Agent::Codex | Agent::Claude, Agent::CursorCli, "PreCompact") => {
+            Some("preCompact".to_string())
+        }
+        (Agent::Codex | Agent::Claude, Agent::CursorCli, "SubagentStart") => {
+            Some("subagentStart".to_string())
+        }
+        (Agent::Codex | Agent::Claude, Agent::CursorCli, "SubagentStop") => {
+            Some("subagentStop".to_string())
+        }
+        (Agent::Codex | Agent::Claude, Agent::CursorCli, "Stop") => Some("stop".to_string()),
+        (Agent::CursorCli, Agent::Codex | Agent::Claude, "preToolUse") => {
+            Some("PreToolUse".to_string())
+        }
+        (Agent::CursorCli, Agent::Codex | Agent::Claude, "postToolUse") => {
+            Some("PostToolUse".to_string())
+        }
+        (Agent::CursorCli, Agent::Codex | Agent::Claude, "sessionStart") => {
+            Some("SessionStart".to_string())
+        }
+        (Agent::CursorCli, Agent::Codex | Agent::Claude, "beforeSubmitPrompt") => {
+            Some("UserPromptSubmit".to_string())
+        }
+        (Agent::CursorCli, Agent::Codex | Agent::Claude, "preCompact") => {
+            Some("PreCompact".to_string())
+        }
+        (Agent::CursorCli, Agent::Codex | Agent::Claude, "subagentStart") => {
+            Some("SubagentStart".to_string())
+        }
+        (Agent::CursorCli, Agent::Codex | Agent::Claude, "subagentStop") => {
+            Some("SubagentStop".to_string())
+        }
+        (Agent::CursorCli, Agent::Codex | Agent::Claude, "stop") => Some("Stop".to_string()),
         _ => None,
     }
 }
@@ -2248,8 +2473,37 @@ fn render_hook_matcher_token(token: &str, source: Agent, target: Agent) -> Optio
             Some("apply_patch|Write|Edit".to_string())
         }
         (Agent::Claude, Agent::Codex, "Agent") => Some("spawn_agent|Agent".to_string()),
-        (_, _, "Read" | "Grep" | "Glob" | "WebFetch" | "WebSearch") => Some(token.to_string()),
-        (_, _, tool) if tool.starts_with("mcp__") => Some(tool.to_string()),
+        (Agent::Codex | Agent::Claude, Agent::CursorCli, "Bash" | "exec_command") => {
+            Some("Shell".to_string())
+        }
+        (
+            Agent::Codex | Agent::Claude,
+            Agent::CursorCli,
+            "apply_patch" | "Write" | "Edit" | "MultiEdit",
+        ) => Some("Write".to_string()),
+        (Agent::Codex | Agent::Claude, Agent::CursorCli, "spawn_agent" | "Agent" | "Task") => {
+            Some("Task".to_string())
+        }
+        (Agent::CursorCli, Agent::Codex, "Shell") => Some("Bash|exec_command".to_string()),
+        (Agent::CursorCli, Agent::Claude, "Shell") => Some("Bash".to_string()),
+        (Agent::CursorCli, Agent::Codex, "Write") => Some("apply_patch|Write|Edit".to_string()),
+        (Agent::CursorCli, Agent::Claude, "Write") => Some("Write|Edit|MultiEdit".to_string()),
+        (Agent::CursorCli, Agent::Codex, "Task") => Some("spawn_agent|Agent".to_string()),
+        (Agent::CursorCli, Agent::Claude, "Task") => Some("Agent".to_string()),
+        (_, Agent::CursorCli, "Read" | "Grep") => Some(token.to_string()),
+        (Agent::CursorCli, Agent::Codex | Agent::Claude, "Read" | "Grep") => {
+            Some(token.to_string())
+        }
+        (
+            Agent::Codex | Agent::Claude,
+            Agent::Codex | Agent::Claude,
+            "Read" | "Grep" | "Glob" | "WebFetch" | "WebSearch",
+        ) => Some(token.to_string()),
+        (Agent::Codex | Agent::Claude, Agent::Codex | Agent::Claude, tool)
+            if tool.starts_with("mcp__") =>
+        {
+            Some(tool.to_string())
+        }
         (Agent::Codex, Agent::Claude, "Write" | "Edit") => Some(token.to_string()),
         (Agent::Claude, Agent::Codex, "apply_patch" | "exec_command") => Some(token.to_string()),
         _ => None,
@@ -2265,7 +2519,10 @@ fn has_regex_syntax(token: &str) -> bool {
     })
 }
 
-fn render_hook_handler(handler: &Value) -> Result<Option<Value>, String> {
+fn render_hook_handler(
+    handler: &Value,
+    target: Agent,
+) -> Result<(Option<Value>, Vec<String>), String> {
     let Some(handler) = handler.as_object() else {
         return Err("omitted because handler is not an object".to_string());
     };
@@ -2283,7 +2540,7 @@ fn render_hook_handler(handler: &Value) -> Result<Option<Value>, String> {
     }
     if let Some(handler_type) = handler.get("type") {
         if handler_type.as_str() != Some("command") {
-            return Ok(None);
+            return Ok((None, Vec::new()));
         }
     }
     let Some(command) = handler.get("command").and_then(Value::as_str) else {
@@ -2303,16 +2560,27 @@ fn render_hook_handler(handler: &Value) -> Result<Option<Value>, String> {
         if !status_message.is_string() {
             return Err("omitted because statusMessage is not a string".to_string());
         }
-        rendered.insert("statusMessage".to_string(), status_message.clone());
+        if target == Agent::CursorCli {
+            return Ok((
+                Some(Value::Object(rendered)),
+                vec![
+                    "omitted statusMessage because Cursor hook definitions do not support it"
+                        .to_string(),
+                ],
+            ));
+        } else {
+            rendered.insert("statusMessage".to_string(), status_message.clone());
+        }
     }
-    Ok(Some(Value::Object(rendered)))
+    Ok((Some(Value::Object(rendered)), Vec::new()))
 }
 
 fn hook_target_path(target: Agent) -> PathBuf {
     match target {
         Agent::Codex => PathBuf::from(".codex/hooks.json"),
         Agent::Claude => PathBuf::from(".claude/settings.json"),
-        Agent::CursorCli | Agent::OpenCode => PathBuf::from(format!("{}:hooks", target.as_str())),
+        Agent::CursorCli => PathBuf::from(".cursor/hooks.json"),
+        Agent::OpenCode => PathBuf::from(format!("{}:hooks", target.as_str())),
     }
 }
 
@@ -2475,6 +2743,38 @@ mod tests {
         assert!(!resources
             .iter()
             .any(|resource| resource.kind == ResourceKind::Hook));
+    }
+
+    #[test]
+    fn cursor_adapter_discovers_hooks_json_as_partial_behavior() {
+        let dir = tempdir().unwrap();
+        fs::create_dir_all(dir.path().join(".cursor")).unwrap();
+        fs::write(
+            dir.path().join(".cursor/hooks.json"),
+            r#"{"version":1,"hooks":{"preToolUse":[{"matcher":"Shell","command":".cursor/hooks/check.sh"}]}}"#,
+        )
+        .unwrap();
+
+        let resources = CursorCliAdapter
+            .discover(dir.path(), Scope::Project)
+            .unwrap();
+        let hook = resources
+            .iter()
+            .find(|resource| {
+                resource.kind == ResourceKind::Hook
+                    && resource.path == Path::new(".cursor/hooks.json")
+            })
+            .unwrap();
+        let resource = CursorCliAdapter.read(dir.path(), hook).unwrap();
+
+        assert_eq!(resource.support, SupportLevel::Partial);
+        assert_eq!(
+            resource.native_extensions["behavior.fields"]["hooks"]["preToolUse"][0]["matcher"],
+            Value::String("Shell".to_string())
+        );
+        assert!(resource.diagnostics.iter().any(|diagnostic| diagnostic
+            .message
+            .contains("hook.preToolUse: executable hook behavior requires compatibility mapping")));
     }
 
     #[test]

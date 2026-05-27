@@ -1543,6 +1543,68 @@ fn diff_codex_hook_returns_rendered_plan() {
 }
 
 #[test]
+fn diff_codex_hook_to_cursor_returns_rendered_plan() {
+    let dir = tempdir().unwrap();
+    fs::create_dir_all(dir.path().join(".codex")).unwrap();
+    fs::write(
+        dir.path().join(".codex/hooks.json"),
+        r#"{"hooks":{"PreToolUse":[{"matcher":"apply_patch","hooks":[{"type":"command","command":"echo edited"}]}]}}"#,
+    )
+    .unwrap();
+
+    let output = Command::cargo_bin("agentsync")
+        .unwrap()
+        .current_dir(dir.path())
+        .args([
+            "diff", "hook", "--from", "codex", "--to", "cursor", "--format", "json",
+        ])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let json: Value = serde_json::from_slice(&output).unwrap();
+
+    assert_eq!(json["actions"][0]["action"], "create");
+    assert_eq!(json["actions"][0]["path"], ".cursor/hooks.json");
+    assert!(json["actions"][0]["rendered"]["contents"]
+        .as_str()
+        .unwrap()
+        .contains("\"matcher\": \"Write\""));
+}
+
+#[test]
+fn diff_cursor_hook_to_codex_returns_rendered_plan() {
+    let dir = tempdir().unwrap();
+    fs::create_dir_all(dir.path().join(".cursor")).unwrap();
+    fs::write(
+        dir.path().join(".cursor/hooks.json"),
+        r#"{"version":1,"hooks":{"preToolUse":[{"matcher":"Shell","command":"echo shell"}]}}"#,
+    )
+    .unwrap();
+
+    let output = Command::cargo_bin("agentsync")
+        .unwrap()
+        .current_dir(dir.path())
+        .args([
+            "diff", "hook", "--from", "cursor", "--to", "codex", "--format", "json",
+        ])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let json: Value = serde_json::from_slice(&output).unwrap();
+
+    assert_eq!(json["actions"][0]["action"], "create");
+    assert_eq!(json["actions"][0]["path"], ".codex/hooks.json");
+    assert!(json["actions"][0]["rendered"]["contents"]
+        .as_str()
+        .unwrap()
+        .contains("\"matcher\": \"Bash|exec_command\""));
+}
+
+#[test]
 fn sync_hook_write_creates_target_and_state() {
     let dir = tempdir().unwrap();
     fs::create_dir_all(dir.path().join(".claude")).unwrap();
@@ -1580,7 +1642,7 @@ fn sync_unsupported_hook_target_is_blocked_before_state_write() {
         .unwrap()
         .current_dir(dir.path())
         .args([
-            "sync", "hooks", "--from", "claude", "--to", "cursor", "--write",
+            "sync", "hooks", "--from", "claude", "--to", "opencode", "--write",
         ])
         .assert()
         .failure();

@@ -4,8 +4,8 @@ Hooks are executable behavior, so AgentSync maps them entry-by-entry instead of
 treating one unmapped field as a reason to drop the whole resource.
 
 This policy is the contract for hook rendering. Today, AgentSync renders the
-direct Codex CLI <-> Claude Code command-hook subset and keeps shim-required or
-report-only entries as diagnostics/native extensions.
+direct Codex CLI, Claude Code, and Cursor command-hook subset and keeps
+shim-required or report-only entries as diagnostics/native extensions.
 
 ## Mapping Outcomes
 
@@ -26,16 +26,16 @@ plan/report and must not be silently omitted.
 
 | Canonical event | Codex CLI | Claude Code | OpenCode | Cursor CLI |
 | --- | --- | --- | --- | --- |
-| `tool.before` | `PreToolUse` direct | `PreToolUse` direct | `tool.execute.before` shim-required | report-only |
-| `tool.after` | `PostToolUse` direct | `PostToolUse` direct | `tool.execute.after` shim-required | report-only |
+| `tool.before` | `PreToolUse` direct | `PreToolUse` direct | `tool.execute.before` shim-required | `preToolUse` direct |
+| `tool.after` | `PostToolUse` direct | `PostToolUse` direct | `tool.execute.after` shim-required | `postToolUse` direct |
 | `permission.request` | `PermissionRequest` direct | `PermissionRequest` direct | `permission.asked` shim-required | report-only |
-| `session.start` | `SessionStart` direct | `SessionStart` direct | `session.created` shim-required | report-only |
-| `prompt.submit` | `UserPromptSubmit` direct | `UserPromptSubmit` direct | report-only | report-only |
-| `compact.before` | `PreCompact` direct | `PreCompact` direct | `experimental.session.compacting` shim-required | report-only |
+| `session.start` | `SessionStart` direct | `SessionStart` direct | `session.created` shim-required | `sessionStart` direct |
+| `prompt.submit` | `UserPromptSubmit` direct | `UserPromptSubmit` direct | report-only | `beforeSubmitPrompt` direct |
+| `compact.before` | `PreCompact` direct | `PreCompact` direct | `experimental.session.compacting` shim-required | `preCompact` direct |
 | `compact.after` | `PostCompact` direct | `PostCompact` direct | `session.compacted` shim-required | report-only |
-| `agent.start` | `SubagentStart` direct | `SubagentStart` direct | report-only | report-only |
-| `agent.stop` | `SubagentStop` direct | `SubagentStop` direct | report-only | report-only |
-| `session.stop` | `Stop` direct | `Stop` direct | report-only | report-only |
+| `agent.start` | `SubagentStart` direct | `SubagentStart` direct | report-only | `subagentStart` direct |
+| `agent.stop` | `SubagentStop` direct | `SubagentStop` direct | report-only | `subagentStop` direct |
+| `session.stop` | `Stop` direct | `Stop` direct | report-only | `stop` direct |
 
 OpenCode mappings are shim-required because OpenCode exposes hooks as plugins,
 not as JSON command-hook declarations. Rendering a Claude/Codex command hook to
@@ -43,22 +43,24 @@ OpenCode requires generated plugin code that runs the command, passes compatible
 JSON on stdin, interprets the command output, and maps blocking decisions to
 OpenCode plugin behavior.
 
-Cursor CLI has no documented hook declaration surface. AgentSync may still
-report hooks found in other agents when targeting Cursor, but it must not render
-Cursor hook files until Cursor publishes a stable hook format.
+Cursor documents native `.cursor/hooks.json` command hooks. AgentSync renders
+only the direct event subset above. Cursor-specific events such as
+`afterFileEdit`, `beforeShellExecution`, tab hooks, and `workspaceOpen` remain
+report-only until AgentSync can map their payload and matcher semantics without
+broadening behavior.
 
 ## Tool Matcher Equivalence
 
 | Canonical matcher | Codex CLI | Claude Code | OpenCode | Cursor CLI |
 | --- | --- | --- | --- | --- |
-| `tool.shell` | `Bash\|exec_command` | `Bash` | `bash` shim-required | report-only |
-| `tool.file.read` | `Read` | `Read` | `read` shim-required | report-only |
-| `tool.file.search` | `Grep` | `Grep` | `grep` shim-required | report-only |
+| `tool.shell` | `Bash\|exec_command` | `Bash` | `bash` shim-required | `Shell` direct |
+| `tool.file.read` | `Read` | `Read` | `read` shim-required | `Read` direct |
+| `tool.file.search` | `Grep` | `Grep` | `grep` shim-required | `Grep` direct |
 | `tool.file.glob` | `Glob` | `Glob` | `glob` shim-required | report-only |
-| `tool.file.write` | `apply_patch\|Write\|Edit` | `Write\|Edit\|MultiEdit` | `edit\|write\|apply_patch` shim-required | report-only |
+| `tool.file.write` | `apply_patch\|Write\|Edit` | `Write\|Edit\|MultiEdit` | `edit\|write\|apply_patch` shim-required | `Write` direct |
 | `tool.web.fetch` | `WebFetch` | `WebFetch` | `webfetch` shim-required | report-only |
 | `tool.web.search` | `WebSearch` | `WebSearch` | `websearch` shim-required | report-only |
-| `tool.agent` | `spawn_agent\|Agent` | `Agent` | report-only | report-only |
+| `tool.agent` | `spawn_agent\|Agent` | `Agent` | report-only | `Task` direct |
 | `tool.mcp` | `mcp__<server>__<tool>` | `mcp__<server>__<tool>` | `<server>_<tool>` shim-required | report-only |
 
 For file-write hooks, AgentSync should prefer the target's broad edit class when
@@ -72,14 +74,18 @@ tools may not provide that payload.
 
 AgentSync can render a hook handler only when these fields are safe:
 
-- `type = "command"`: direct between Codex and Claude when command-output
-  decision semantics are compatible.
+- `type = "command"`: direct between Codex, Claude, and Cursor when
+  command-output decision semantics are compatible.
 - `command`: preserve exactly unless path rewriting is explicitly implemented.
 - `timeout`: render when the target supports the same units and cancellation
   behavior.
 - `statusMessage`: render when supported; otherwise report as omitted.
 - `async`, `args`, `shell`, `if`, HTTP hooks, MCP-tool hooks, prompt hooks, and
   agent hooks: report-only until the target-specific semantics are implemented.
+
+When rendering into Cursor, `statusMessage` is reported and omitted because
+Cursor hook definitions do not support it. Cursor `failClosed`, `loop_limit`,
+prompt hooks, and Cursor-only matcher surfaces are report-only.
 
 When rendering into OpenCode, every command hook is `shim-required`; the source
 command can be reused, but wrapper generation must adapt stdin/stdout.
@@ -117,6 +123,10 @@ command can be reused, but wrapper generation must adapt stdin/stdout.
 - OpenCode documents built-in tool names including `bash`, `edit`, `write`,
   `read`, `grep`, `glob`, `apply_patch`, `webfetch`, and `websearch`:
   https://opencode.ai/docs/tools/
-- Cursor CLI docs currently describe rules, MCP, permissions, and command
-  approval, but not a stable hook declaration format:
-  https://docs.cursor.com/en/cli/using
+- Cursor documents `.cursor/hooks.json`, command-based hooks, supported events,
+  and matchers including `Shell`, `Read`, `Write`, `Grep`, `Task`, and
+  `MCP:<tool_name>`:
+  https://cursor.com/docs/hooks
+- Cursor documents Claude Code hook compatibility and the Claude-to-Cursor event
+  and tool-name mappings:
+  https://cursor.com/docs/reference/third-party-hooks
