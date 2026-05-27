@@ -36,9 +36,10 @@ rendering target files or updating state. OpenCode command files and
 `opencode.json` / `opencode.jsonc` command config are discovered as blocked
 command resources.
 
-Hooks follow the same safety model. Claude settings files with a top-level
-`hooks` field are discovered as hook resources, and `diff hook` / `sync hooks`
-return blocked plan actions until hook conversion has an explicit safety design.
+Hooks follow the same safety model. Claude settings files and Codex
+`.codex/hooks.json` files with a top-level `hooks` field are discovered as hook
+resources, and `diff hook` / `sync hooks` return blocked plan actions until hook
+conversion has an explicit safety design.
 
 Blocked behavioral resources preserve their raw native file text in native
 extensions so scan/status output can surface what was blocked without rendering

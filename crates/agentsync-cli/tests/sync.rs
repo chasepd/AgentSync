@@ -1499,6 +1499,40 @@ fn diff_hook_returns_blocked_plan() {
 }
 
 #[test]
+fn diff_codex_hook_returns_blocked_plan() {
+    let dir = tempdir().unwrap();
+    fs::create_dir_all(dir.path().join(".codex")).unwrap();
+    fs::write(
+        dir.path().join(".codex/hooks.json"),
+        r#"{"hooks":{"PreToolUse":[]}}"#,
+    )
+    .unwrap();
+
+    let output = Command::cargo_bin("agentsync")
+        .unwrap()
+        .current_dir(dir.path())
+        .args([
+            "diff", "hook", "--from", "codex", "--to", "claude", "--format", "json",
+        ])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let json: Value = serde_json::from_slice(&output).unwrap();
+
+    assert_eq!(json["actions"][0]["action"], "block");
+    assert_eq!(
+        json["actions"][0]["resource_id"],
+        "hooks:codex:.codex/hooks.json"
+    );
+    assert!(json["diagnostics"][0]["message"]
+        .as_str()
+        .unwrap()
+        .contains("behavioral resources are blocked"));
+}
+
+#[test]
 fn sync_hook_write_is_blocked_before_state_write() {
     let dir = tempdir().unwrap();
     fs::create_dir_all(dir.path().join(".claude")).unwrap();

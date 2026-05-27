@@ -16,7 +16,8 @@ Each adapter provides:
 
 - Claude Code: `CLAUDE.md`, `.claude/agents`, `.claude/skills`, settings
   hooks, and settings permissions.
-- Codex CLI: `AGENTS.md`, skills, plugins, subagents, Codex customization.
+- Codex CLI: `AGENTS.md`, skills, hooks, plugins, subagents, Codex
+  customization.
 - Cursor CLI: CLI-consumed rules in `.cursor/rules`, root `AGENTS.md` /
   `CLAUDE.md` where supported, and portable skills. This target is not Cursor
   IDE workspace automation.

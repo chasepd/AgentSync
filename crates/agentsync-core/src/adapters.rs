@@ -95,9 +95,17 @@ impl AgentAdapter for CodexAdapter {
 
     fn discover(&self, root: &Path, scope: Scope) -> Result<Vec<NativeResource>, AgentSyncError> {
         let mut resources = Vec::new();
-        let (rules, skills) = match scope {
-            Scope::Project => ("AGENTS.md", [".codex/skills", ".agents/skills"]),
-            Scope::User => (".codex/AGENTS.md", [".codex/skills", ".agents/skills"]),
+        let (rules, skills, hook_files) = match scope {
+            Scope::Project => (
+                "AGENTS.md",
+                [".codex/skills", ".agents/skills"],
+                [".codex/hooks.json"],
+            ),
+            Scope::User => (
+                ".codex/AGENTS.md",
+                [".codex/skills", ".agents/skills"],
+                [".codex/hooks.json"],
+            ),
             Scope::All => return Ok(Vec::new()),
         };
         push_if_exists(
@@ -109,6 +117,15 @@ impl AgentAdapter for CodexAdapter {
             scope,
         );
         discover_skill_dirs(&mut resources, root, self.agent(), skills, scope);
+        discover_json_key_files(
+            &mut resources,
+            root,
+            self.agent(),
+            ResourceKind::Hook,
+            hook_files,
+            "hooks",
+            scope,
+        );
         Ok(resources)
     }
 
@@ -1427,7 +1444,7 @@ fn add_behavior_diagnostics(
     diagnostics: &mut Vec<Diagnostic>,
 ) {
     let keys = match (native.agent, native.kind) {
-        (Agent::Claude, ResourceKind::Hook) => &["hooks"][..],
+        (Agent::Codex, ResourceKind::Hook) | (Agent::Claude, ResourceKind::Hook) => &["hooks"][..],
         (Agent::Claude, ResourceKind::Permission) => &["permissions"][..],
         (Agent::OpenCode, ResourceKind::Permission) => &["permission"][..],
         _ => &[][..],
@@ -1952,6 +1969,10 @@ mod tests {
             Some(&SupportLevel::Portable)
         );
         assert_eq!(
+            capabilities.resources.get(&ResourceKind::Hook),
+            Some(&SupportLevel::Blocked)
+        );
+        assert_eq!(
             capabilities.fields.get("subagent.instructions"),
             Some(&SupportLevel::Portable)
         );
@@ -1975,6 +1996,36 @@ mod tests {
             capabilities.resources.get(&ResourceKind::Permission),
             Some(&SupportLevel::Blocked)
         );
+    }
+
+    #[test]
+    fn codex_adapter_discovers_hooks_json_as_blocked_behavior() {
+        let dir = tempdir().unwrap();
+        fs::create_dir_all(dir.path().join(".codex")).unwrap();
+        fs::write(
+            dir.path().join(".codex/hooks.json"),
+            r#"{"hooks":{"PreToolUse":[{"matcher":"apply_patch","hooks":[{"type":"command","command":"bash .codex/hooks/enforce.sh"}]}],"PostToolUse":[]}}"#,
+        )
+        .unwrap();
+
+        let resources = CodexAdapter.discover(dir.path(), Scope::Project).unwrap();
+        let hook = resources
+            .iter()
+            .find(|resource| {
+                resource.kind == ResourceKind::Hook
+                    && resource.path == Path::new(".codex/hooks.json")
+            })
+            .unwrap();
+        let resource = CodexAdapter.read(dir.path(), hook).unwrap();
+
+        assert_eq!(resource.support, SupportLevel::Blocked);
+        assert_eq!(
+            resource.native_extensions["behavior.fields"]["hooks"]["PostToolUse"],
+            Value::Array(Vec::new())
+        );
+        assert!(resource.diagnostics.iter().any(|diagnostic| diagnostic
+            .message
+            .contains("hook.PreToolUse: blocked executable hook behavior")));
     }
 
     #[test]
