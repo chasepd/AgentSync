@@ -502,8 +502,12 @@ jobs:
 By default, the reusable workflow installs AgentSync from `chasepd/AgentSync`
 at `main`. Pin `agentsync-ref` to a release tag or commit for stricter
 reproducibility. The default `GITHUB_TOKEN` can create the sync branch and PR
-when the caller grants `contents: write` and `pull-requests: write`; pass a
-custom `token` secret if your repo needs PR-created workflows to trigger:
+when the caller grants `contents: write` and `pull-requests: write` and the
+repository enables **Settings -> Actions -> General -> Workflow permissions ->
+Allow GitHub Actions to create and approve pull requests**.
+
+Pass a custom `token` secret if your repo cannot enable that setting or needs
+PR-created workflows to trigger:
 
 ```yaml
     secrets:

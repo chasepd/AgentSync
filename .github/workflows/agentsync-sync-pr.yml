@@ -141,6 +141,7 @@ jobs:
           PR_TITLE: ${{ inputs.pr-title }}
           PR_BODY: ${{ inputs.pr-body }}
           DRAFT: ${{ inputs.draft }}
+          USING_DEFAULT_TOKEN: ${{ secrets.token == '' }}
         run: |
           set -euo pipefail
           base_branch="${BASE_BRANCH:-$GITHUB_REF_NAME}"
@@ -151,11 +152,43 @@ jobs:
           if [ -n "$number" ]; then
             gh pr edit "$number" --base "$base_branch" --title "$PR_TITLE" --body-file "$body_file"
           else
+            can_create=""
+            if [ "$USING_DEFAULT_TOKEN" = "true" ]; then
+              can_create="$(gh api "repos/$GH_REPO/actions/permissions/workflow" --jq '.can_approve_pull_request_reviews' 2>/tmp/agentsync-workflow-permissions.err || true)"
+            fi
+            if [ "$USING_DEFAULT_TOKEN" = "true" ] && [ "$can_create" = "false" ]; then
+              {
+                echo "## AgentSync could not create a pull request"
+                echo
+                echo "The sync branch was pushed, but this repository does not allow GitHub Actions to create pull requests with \`GITHUB_TOKEN\`."
+                echo
+                echo "Enable **Settings -> Actions -> General -> Workflow permissions -> Allow GitHub Actions to create and approve pull requests**, then rerun this workflow."
+                echo
+                echo "Alternatively, pass a PAT or GitHub App token as the reusable workflow's \`token\` secret."
+              } >> "$GITHUB_STEP_SUMMARY"
+              echo "::error title=GitHub Actions PR creation is disabled::Enable Settings -> Actions -> General -> Workflow permissions -> Allow GitHub Actions to create and approve pull requests, or pass a PAT/GitHub App token as the reusable workflow's token secret."
+              exit 1
+            fi
             args=(--base "$base_branch" --head "$BRANCH" --title "$PR_TITLE" --body-file "$body_file")
             if [ "$DRAFT" = "true" ]; then
               args+=(--draft)
             fi
-            url="$(gh pr create "${args[@]}")"
+            if ! url="$(gh pr create "${args[@]}" 2>/tmp/agentsync-pr-create.err)"; then
+              if grep -q "GitHub Actions is not permitted to create or approve pull requests" /tmp/agentsync-pr-create.err; then
+                {
+                  echo "## AgentSync could not create a pull request"
+                  echo
+                  echo "The sync branch was pushed, but this repository does not allow GitHub Actions to create pull requests with \`GITHUB_TOKEN\`."
+                  echo
+                  echo "Enable **Settings -> Actions -> General -> Workflow permissions -> Allow GitHub Actions to create and approve pull requests**, then rerun this workflow."
+                  echo
+                  echo "Alternatively, pass a PAT or GitHub App token as the reusable workflow's \`token\` secret."
+                } >> "$GITHUB_STEP_SUMMARY"
+                echo "::error title=GitHub Actions PR creation is disabled::Enable Settings -> Actions -> General -> Workflow permissions -> Allow GitHub Actions to create and approve pull requests, or pass a PAT/GitHub App token as the reusable workflow's token secret."
+              fi
+              cat /tmp/agentsync-pr-create.err >&2
+              exit 1
+            fi
             echo "url=$url" >> "$GITHUB_OUTPUT"
             exit 0
           fi
