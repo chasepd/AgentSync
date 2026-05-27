@@ -12,6 +12,7 @@ use std::path::{Path, PathBuf};
 
 use chrono::Utc;
 use config::{config_path, load_config};
+use jsonc_parser::{parse_to_serde_value, ParseOptions};
 use model::{NativeResource, NormalizedResource, SupportLevel};
 use report::{
     DoctorReport, DriftState, InitActionKind, InitReport, PlanAction, PlanActionKind, PlanReport,
@@ -555,6 +556,7 @@ pub fn plan_filters_with_options_and_adapters(
                     | ResourceKind::Skill
                     | ResourceKind::Subagent
                     | ResourceKind::Command
+                    | ResourceKind::Hook
             ) {
                 diagnostics.extend(source.diagnostics.clone());
                 actions.push(block_action(source, *target, "non-portable"));
@@ -579,9 +581,22 @@ pub fn plan_filters_with_options_and_adapters(
                 actions.push(block_action(source, *target, "non-portable"));
                 continue;
             }
+            if source.kind == ResourceKind::Hook
+                && (source.support == SupportLevel::Blocked
+                    || !matches!(source.source_agent, Agent::Codex | Agent::Claude)
+                    || !matches!(*target, Agent::Codex | Agent::Claude))
+            {
+                diagnostics.extend(source.diagnostics.clone());
+                actions.push(block_action(source, *target, "non-portable"));
+                continue;
+            }
             let (rendered, render_diagnostics) = render_for_target(source, *target, adapters)?;
             diagnostics.extend(render_diagnostics);
-            for file in rendered {
+            if rendered.is_empty() {
+                actions.push(block_action(source, *target, "non-portable"));
+                continue;
+            }
+            for mut file in rendered {
                 if from == SourceAlias::All && source_owns_path(source, &file.path) {
                     actions.push(PlanAction {
                         action: PlanActionKind::Skip,
@@ -591,6 +606,17 @@ pub fn plan_filters_with_options_and_adapters(
                         rendered: Some(file),
                         diff: None,
                     });
+                    continue;
+                }
+                if let Err(diagnostic) =
+                    merge_rendered_hook_config(root, source, *target, &mut file)
+                {
+                    diagnostics.push(diagnostic);
+                    actions.push(block_action(
+                        source,
+                        *target,
+                        "target hook config could not be merged",
+                    ));
                     continue;
                 }
                 let path = root.join(&file.path);
@@ -1078,6 +1104,113 @@ fn render_for_target(
             AgentSyncError::Adapter(format!("missing adapter for {}", target.as_str()))
         })?;
     adapter.render(source)
+}
+
+fn merge_rendered_hook_config(
+    root: &Path,
+    source: &NormalizedResource,
+    target: Agent,
+    file: &mut model::RenderedFile,
+) -> Result<(), Diagnostic> {
+    if source.kind != ResourceKind::Hook {
+        return Ok(());
+    }
+    if !matches!(target, Agent::Codex | Agent::Claude) {
+        return Ok(());
+    }
+    let abs = root.join(&file.path);
+    if !abs.exists() {
+        return Ok(());
+    }
+
+    let rendered = parse_jsonc_value(&file.contents).map_err(|error| Diagnostic {
+        severity: DiagnosticSeverity::Error,
+        resource_id: Some(source.id.clone()),
+        resource_kind: Some(ResourceKind::Hook),
+        agent: Some(target),
+        message: format!(
+            "hook.render: generated hook config {} could not be parsed: {error}",
+            file.path.display()
+        ),
+    })?;
+    let Some(rendered_hooks) = rendered.get("hooks").cloned() else {
+        return Err(Diagnostic {
+            severity: DiagnosticSeverity::Error,
+            resource_id: Some(source.id.clone()),
+            resource_kind: Some(ResourceKind::Hook),
+            agent: Some(target),
+            message: format!(
+                "hook.render: generated hook config {} did not contain hooks",
+                file.path.display()
+            ),
+        });
+    };
+
+    let raw = fs::read_to_string(&abs).map_err(|error| Diagnostic {
+        severity: DiagnosticSeverity::Error,
+        resource_id: Some(source.id.clone()),
+        resource_kind: Some(ResourceKind::Hook),
+        agent: Some(target),
+        message: format!(
+            "hook.render: existing target hook config {} could not be read: {error}",
+            file.path.display()
+        ),
+    })?;
+    let existing = parse_jsonc_value(&raw).map_err(|error| Diagnostic {
+        severity: DiagnosticSeverity::Error,
+        resource_id: Some(source.id.clone()),
+        resource_kind: Some(ResourceKind::Hook),
+        agent: Some(target),
+        message: format!(
+            "hook.render: existing target hook config {} could not be parsed for merge: {error}",
+            file.path.display()
+        ),
+    })?;
+    let Some(mut object) = existing.as_object().cloned() else {
+        return Err(Diagnostic {
+            severity: DiagnosticSeverity::Error,
+            resource_id: Some(source.id.clone()),
+            resource_kind: Some(ResourceKind::Hook),
+            agent: Some(target),
+            message: format!(
+                "hook.render: existing target hook config {} is not a JSON object",
+                file.path.display()
+            ),
+        });
+    };
+
+    object.insert("hooks".to_string(), rendered_hooks);
+    file.contents = format!(
+        "{}\n",
+        serde_json::to_string_pretty(&serde_json::Value::Object(object)).map_err(|error| {
+            Diagnostic {
+                severity: DiagnosticSeverity::Error,
+                resource_id: Some(source.id.clone()),
+                resource_kind: Some(ResourceKind::Hook),
+                agent: Some(target),
+                message: format!(
+                    "hook.render: merged target hook config {} could not be serialized: {error}",
+                    file.path.display()
+                ),
+            }
+        })?
+    );
+    Ok(())
+}
+
+fn parse_jsonc_value(raw: &str) -> Result<serde_json::Value, jsonc_parser::errors::ParseError> {
+    parse_to_serde_value::<serde_json::Value>(
+        raw,
+        &ParseOptions {
+            allow_comments: true,
+            allow_loose_object_property_names: false,
+            allow_trailing_commas: true,
+            allow_missing_commas: false,
+            allow_single_quoted_strings: false,
+            allow_hexadecimal_numbers: false,
+            allow_unary_plus_numbers: false,
+        },
+    )
 }
 
 fn block_action(source: &NormalizedResource, target: Agent, reason: &str) -> PlanAction {
@@ -1987,7 +2120,7 @@ mod tests {
             dir.path(),
             ResourceSelector::Hooks,
             SourceAlias::Claude,
-            &[Agent::Codex],
+            &[Agent::CursorCli],
         )
         .unwrap();
 
@@ -2197,7 +2330,7 @@ mod tests {
             dir.path(),
             ResourceFilter::all(ResourceSelector::Hooks),
             SourceAlias::Claude,
-            &[Agent::Codex],
+            &[Agent::CursorCli],
             PlanOptions {
                 strategy: ConflictStrategy::Source,
                 ..PlanOptions::default()
@@ -2858,12 +2991,12 @@ mod tests {
     }
 
     #[test]
-    fn hook_plan_is_blocked_and_not_rendered() {
+    fn hook_plan_renders_claude_hooks_to_codex() {
         let dir = tempdir().unwrap();
         fs::create_dir_all(dir.path().join(".claude")).unwrap();
         fs::write(
             dir.path().join(".claude/settings.json"),
-            r#"{"hooks":{"PreToolUse":[]}}"#,
+            r#"{"hooks":{"PreToolUse":[{"matcher":"Bash","hooks":[{"type":"command","command":"echo hi","timeout":3,"statusMessage":"Checking"}]}]}}"#,
         )
         .unwrap();
 
@@ -2875,13 +3008,153 @@ mod tests {
         )
         .unwrap();
 
-        assert_eq!(report.actions[0].action, PlanActionKind::Block);
+        assert_eq!(report.actions[0].action, PlanActionKind::Create);
         assert_eq!(
             report.actions[0].resource_id,
             "hooks:claude:.claude/settings.json"
         );
+        let rendered = report.actions[0].rendered.as_ref().unwrap();
+        assert_eq!(rendered.path, Path::new(".codex/hooks.json"));
+        let json: serde_json::Value = serde_json::from_str(&rendered.contents).unwrap();
+        assert_eq!(
+            json["hooks"]["PreToolUse"][0]["matcher"],
+            "Bash|exec_command"
+        );
+        assert_eq!(
+            json["hooks"]["PreToolUse"][0]["hooks"][0]["command"],
+            "echo hi"
+        );
+        assert!(report.diagnostics.iter().any(|diagnostic| diagnostic
+            .message
+            .contains("hook.render: rendered 1 command handler")));
+        assert!(!report.has_blocking_issues());
+        write_plan(dir.path(), &report).unwrap();
+        assert!(dir.path().join(".agentsync/state.json").exists());
+    }
+
+    #[test]
+    fn hook_plan_renders_codex_hooks_to_claude_and_preserves_settings() {
+        let dir = tempdir().unwrap();
+        fs::create_dir_all(dir.path().join(".codex")).unwrap();
+        fs::write(
+            dir.path().join(".codex/hooks.json"),
+            r#"{"hooks":{"PostToolUse":[{"matcher":"apply_patch","hooks":[{"type":"command","command":"echo edited"}]}]}}"#,
+        )
+        .unwrap();
+        fs::create_dir_all(dir.path().join(".claude")).unwrap();
+        fs::write(
+            dir.path().join(".claude/settings.json"),
+            r#"{"permissions":{"allow":["Bash(git status)"]},"hooks":{"Stop":[]}}"#,
+        )
+        .unwrap();
+
+        let report = plan(
+            dir.path(),
+            ResourceSelector::Hooks,
+            SourceAlias::Codex,
+            &[Agent::Claude],
+        )
+        .unwrap();
+
+        assert_eq!(report.actions[0].action, PlanActionKind::Update);
+        let rendered = report.actions[0].rendered.as_ref().unwrap();
+        assert_eq!(rendered.path, Path::new(".claude/settings.json"));
+        let json: serde_json::Value = serde_json::from_str(&rendered.contents).unwrap();
+        assert_eq!(json["permissions"]["allow"][0], "Bash(git status)");
+        assert_eq!(
+            json["hooks"]["PostToolUse"][0]["matcher"],
+            "Write|Edit|MultiEdit"
+        );
+        assert_eq!(
+            json["hooks"]["PostToolUse"][0]["hooks"][0]["command"],
+            "echo edited"
+        );
+    }
+
+    #[test]
+    fn hook_plan_omits_unsupported_matcher_and_keeps_supported_groups() {
+        let dir = tempdir().unwrap();
+        fs::create_dir_all(dir.path().join(".claude")).unwrap();
+        fs::write(
+            dir.path().join(".claude/settings.json"),
+            r#"{"hooks":{"PreToolUse":[{"matcher":"Bash(.*)","hooks":[{"type":"command","command":"echo bad"}]},{"matcher":"Read","hooks":[{"type":"command","command":"echo ok"}]}]}}"#,
+        )
+        .unwrap();
+
+        let report = plan(
+            dir.path(),
+            ResourceSelector::Hooks,
+            SourceAlias::Claude,
+            &[Agent::Codex],
+        )
+        .unwrap();
+
+        assert_eq!(report.actions[0].action, PlanActionKind::Create);
+        let rendered = report.actions[0].rendered.as_ref().unwrap();
+        let json: serde_json::Value = serde_json::from_str(&rendered.contents).unwrap();
+        assert_eq!(json["hooks"]["PreToolUse"].as_array().unwrap().len(), 1);
+        assert_eq!(json["hooks"]["PreToolUse"][0]["matcher"], "Read");
+        assert_eq!(
+            json["hooks"]["PreToolUse"][0]["hooks"][0]["command"],
+            "echo ok"
+        );
+        assert!(!rendered.contents.contains("echo bad"));
+        assert!(report.diagnostics.iter().any(|diagnostic| diagnostic
+            .message
+            .contains("uses regex syntax that is report-only")));
+    }
+
+    #[test]
+    fn hook_plan_omits_non_string_matcher_without_broadening_trigger() {
+        let dir = tempdir().unwrap();
+        fs::create_dir_all(dir.path().join(".claude")).unwrap();
+        fs::write(
+            dir.path().join(".claude/settings.json"),
+            r#"{"hooks":{"PreToolUse":[{"matcher":7,"hooks":[{"type":"command","command":"echo bad"}]},{"matcher":"Bash","hooks":[{"type":"command","command":"echo ok"}]}]}}"#,
+        )
+        .unwrap();
+
+        let report = plan(
+            dir.path(),
+            ResourceSelector::Hooks,
+            SourceAlias::Claude,
+            &[Agent::Codex],
+        )
+        .unwrap();
+
+        assert_eq!(report.actions[0].action, PlanActionKind::Create);
+        let rendered = report.actions[0].rendered.as_ref().unwrap();
+        let json: serde_json::Value = serde_json::from_str(&rendered.contents).unwrap();
+        assert_eq!(json["hooks"]["PreToolUse"].as_array().unwrap().len(), 1);
+        assert_eq!(
+            json["hooks"]["PreToolUse"][0]["matcher"],
+            "Bash|exec_command"
+        );
+        assert!(!rendered.contents.contains("echo bad"));
+        assert!(report.diagnostics.iter().any(|diagnostic| diagnostic
+            .message
+            .contains("omitted because matcher is not a string")));
+    }
+
+    #[test]
+    fn unsupported_hook_target_still_blocks() {
+        let dir = tempdir().unwrap();
+        fs::create_dir_all(dir.path().join(".claude")).unwrap();
+        fs::write(
+            dir.path().join(".claude/settings.json"),
+            r#"{"hooks":{"PreToolUse":[{"matcher":"Bash","hooks":[{"type":"command","command":"echo hi"}]}]}}"#,
+        )
+        .unwrap();
+
+        let report = plan(
+            dir.path(),
+            ResourceSelector::Hooks,
+            SourceAlias::Claude,
+            &[Agent::CursorCli],
+        )
+        .unwrap();
+
+        assert_eq!(report.actions[0].action, PlanActionKind::Block);
         assert!(report.actions[0].rendered.is_none());
-        assert!(write_plan(dir.path(), &report).is_err());
-        assert!(!dir.path().join(".agentsync/state.json").exists());
     }
 }

@@ -167,11 +167,7 @@ pub const HOOK_EVENT_EQUIVALENCE: &[HookEquivalence] = &[
         purpose: "after conversation compaction completes",
         mappings: &[
             direct(Agent::Codex, "PostCompact"),
-            report_only(
-                Agent::Claude,
-                None,
-                "Claude Code has no documented PostCompact hook event",
-            ),
+            direct(Agent::Claude, "PostCompact"),
             shim(
                 Agent::OpenCode,
                 "session.compacted",

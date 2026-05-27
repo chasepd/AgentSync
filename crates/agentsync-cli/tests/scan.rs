@@ -418,7 +418,7 @@ fn scan_json_includes_permission_config_as_blocked() {
 }
 
 #[test]
-fn scan_json_includes_hook_config_as_structured_blocked_behavior() {
+fn scan_json_includes_hook_config_as_structured_partial_behavior() {
     let dir = tempdir().unwrap();
     fs::create_dir_all(dir.path().join(".claude")).unwrap();
     fs::write(
@@ -445,18 +445,18 @@ fn scan_json_includes_hook_config_as_structured_blocked_behavior() {
         .unwrap();
 
     assert_eq!(hook["kind"], "hook");
-    assert_eq!(hook["support"], "blocked");
+    assert_eq!(hook["support"], "partial");
     assert!(hook["native_extensions"]["behavior.fields"]["hooks"]["PreToolUse"].is_array());
     assert!(hook["diagnostics"]
         .as_array()
         .unwrap()
         .iter()
         .any(|diagnostic| diagnostic["message"]
-            == "hook.PreToolUse: blocked executable hook behavior"));
+            == "hook.PreToolUse: executable hook behavior requires compatibility mapping"));
 }
 
 #[test]
-fn scan_json_includes_codex_hook_config_as_structured_blocked_behavior() {
+fn scan_json_includes_codex_hook_config_as_structured_partial_behavior() {
     let dir = tempdir().unwrap();
     fs::create_dir_all(dir.path().join(".codex")).unwrap();
     fs::write(
@@ -483,12 +483,12 @@ fn scan_json_includes_codex_hook_config_as_structured_blocked_behavior() {
         .unwrap();
 
     assert_eq!(hook["kind"], "hook");
-    assert_eq!(hook["support"], "blocked");
+    assert_eq!(hook["support"], "partial");
     assert!(hook["native_extensions"]["behavior.fields"]["hooks"]["PreToolUse"].is_array());
     assert!(hook["diagnostics"]
         .as_array()
         .unwrap()
         .iter()
         .any(|diagnostic| diagnostic["message"]
-            == "hook.PreToolUse: blocked executable hook behavior"));
+            == "hook.PreToolUse: executable hook behavior requires compatibility mapping"));
 }

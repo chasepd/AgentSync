@@ -1,4 +1,5 @@
 use std::collections::BTreeMap;
+use std::collections::BTreeSet;
 use std::fs;
 use std::path::{Path, PathBuf};
 
@@ -424,7 +425,14 @@ fn portable_capabilities(agent: Agent) -> AdapterCapabilities {
     resources.insert(ResourceKind::RuleSet, SupportLevel::Portable);
     resources.insert(ResourceKind::Skill, SupportLevel::Portable);
     resources.insert(ResourceKind::Subagent, SupportLevel::Partial);
-    resources.insert(ResourceKind::Hook, SupportLevel::Blocked);
+    resources.insert(
+        ResourceKind::Hook,
+        if matches!(agent, Agent::Codex | Agent::Claude) {
+            SupportLevel::Partial
+        } else {
+            SupportLevel::Blocked
+        },
+    );
     resources.insert(ResourceKind::Command, SupportLevel::Partial);
     resources.insert(ResourceKind::Plugin, SupportLevel::Blocked);
     resources.insert(ResourceKind::Permission, SupportLevel::Blocked);
@@ -1403,7 +1411,14 @@ fn blocked_behavior(root: &Path, native: &NativeResource) -> NormalizedResource 
         resource_id: Some(native.id.clone()),
         resource_kind: Some(native.kind),
         agent: Some(native.agent),
-        message: "behavioral resources are blocked for MVP sync".to_string(),
+        message: if native.kind == ResourceKind::Hook
+            && matches!(native.agent, Agent::Codex | Agent::Claude)
+        {
+            "hook resource is partially supported; unsupported entries remain report-only"
+                .to_string()
+        } else {
+            "behavioral resources are blocked for MVP sync".to_string()
+        },
     }];
     match fs::read_to_string(root.join(&native.path)) {
         Ok(raw) => {
@@ -1421,6 +1436,14 @@ fn blocked_behavior(root: &Path, native: &NativeResource) -> NormalizedResource 
             ),
         }),
     }
+    let support = if native.kind == ResourceKind::Hook
+        && matches!(native.agent, Agent::Codex | Agent::Claude)
+        && native_extensions.contains_key("behavior.fields")
+    {
+        SupportLevel::Partial
+    } else {
+        SupportLevel::Blocked
+    };
     NormalizedResource {
         id: native.id.clone(),
         kind: native.kind,
@@ -1433,7 +1456,7 @@ fn blocked_behavior(root: &Path, native: &NativeResource) -> NormalizedResource 
         command: None,
         native_extensions,
         diagnostics,
-        support: SupportLevel::Blocked,
+        support,
     }
 }
 
@@ -1495,13 +1518,15 @@ fn add_behavior_field_diagnostics(
         ResourceKind::Hook => {
             diagnostics.push(behavior_diagnostic(
                 native,
-                &format!("hook.{key}: blocked executable hook behavior"),
+                &format!("hook.{key}: executable hook behavior requires compatibility mapping"),
             ));
             if let Some(object) = field.as_object() {
                 for event in object.keys() {
                     diagnostics.push(behavior_diagnostic(
                         native,
-                        &format!("hook.{event}: blocked executable hook behavior"),
+                        &format!(
+                            "hook.{event}: executable hook behavior requires compatibility mapping"
+                        ),
                     ));
                 }
             }
@@ -1707,8 +1732,9 @@ fn render_native(
         ResourceKind::Skill => render_skill(resource, target),
         ResourceKind::Subagent => render_subagent(resource, target),
         ResourceKind::Command => render_command(resource, target),
+        ResourceKind::Hook => render_hook(resource, target),
         _ => Err(AgentSyncError::InvalidArgument(
-            "only rules, skills, portable subagents, and prompt-only commands can be rendered"
+            "only rules, skills, portable subagents, prompt-only commands, and supported hooks can be rendered"
                 .to_string(),
         )),
     }
@@ -1951,6 +1977,359 @@ fn render_opencode_command(
     ))
 }
 
+fn render_hook(
+    resource: &NormalizedResource,
+    target: Agent,
+) -> Result<(Vec<RenderedFile>, Vec<Diagnostic>), AgentSyncError> {
+    if !matches!(resource.source_agent, Agent::Codex | Agent::Claude)
+        || !matches!(target, Agent::Codex | Agent::Claude)
+    {
+        return Err(AgentSyncError::InvalidArgument(
+            "hook rendering is currently supported only between Codex and Claude targets"
+                .to_string(),
+        ));
+    }
+
+    let hooks = resource
+        .native_extensions
+        .get("behavior.fields")
+        .and_then(|fields| fields.get("hooks"))
+        .and_then(Value::as_object)
+        .ok_or_else(|| AgentSyncError::Adapter("missing hook behavior fields".to_string()))?;
+
+    let mut diagnostics = Vec::new();
+    let mut rendered_hooks = serde_json::Map::new();
+    let mut rendered_handlers = 0usize;
+    let mut omitted_entries = 0usize;
+
+    for (event, groups) in hooks {
+        let Some(target_event) = render_hook_event_name(event, resource.source_agent, target)
+        else {
+            omitted_entries += 1;
+            diagnostics.push(hook_render_diagnostic(
+                resource,
+                target,
+                &format!(
+                    "hook.{event}: report-only; no direct event mapping to {}",
+                    target.as_str()
+                ),
+            ));
+            continue;
+        };
+
+        let Some(groups) = groups.as_array() else {
+            omitted_entries += 1;
+            diagnostics.push(hook_render_diagnostic(
+                resource,
+                target,
+                &format!("hook.{event}: omitted because event groups are not an array"),
+            ));
+            continue;
+        };
+
+        let mut rendered_groups = Vec::new();
+        for (group_index, group) in groups.iter().enumerate() {
+            let Some(group) = group.as_object() else {
+                omitted_entries += 1;
+                diagnostics.push(hook_render_diagnostic(
+                    resource,
+                    target,
+                    &format!("hook.{event}[{group_index}]: omitted because group is not an object"),
+                ));
+                continue;
+            };
+            let unsupported_group_keys = group
+                .keys()
+                .filter(|key| !matches!(key.as_str(), "matcher" | "hooks"))
+                .cloned()
+                .collect::<Vec<_>>();
+            if !unsupported_group_keys.is_empty() {
+                omitted_entries += 1;
+                diagnostics.push(hook_render_diagnostic(
+                    resource,
+                    target,
+                    &format!(
+                        "hook.{event}[{group_index}]: omitted unsupported group fields: {}",
+                        unsupported_group_keys.join(", ")
+                    ),
+                ));
+                continue;
+            }
+
+            let matcher = match group.get("matcher") {
+                Some(matcher) => {
+                    let Some(matcher) = matcher.as_str() else {
+                        omitted_entries += 1;
+                        diagnostics.push(hook_render_diagnostic(
+                            resource,
+                            target,
+                            &format!(
+                                "hook.{event}[{group_index}]: omitted because matcher is not a string"
+                            ),
+                        ));
+                        continue;
+                    };
+                    match render_hook_matcher(matcher, resource.source_agent, target) {
+                        Ok(matcher) => matcher,
+                        Err(message) => {
+                            omitted_entries += 1;
+                            diagnostics.push(hook_render_diagnostic(
+                                resource,
+                                target,
+                                &format!("hook.{event}[{group_index}]: {message}"),
+                            ));
+                            continue;
+                        }
+                    }
+                }
+                None => None,
+            };
+            let Some(handlers) = group.get("hooks").and_then(Value::as_array) else {
+                omitted_entries += 1;
+                diagnostics.push(hook_render_diagnostic(
+                    resource,
+                    target,
+                    &format!("hook.{event}[{group_index}]: omitted because hooks are not an array"),
+                ));
+                continue;
+            };
+
+            let mut rendered_group_handlers = Vec::new();
+            for (handler_index, handler) in handlers.iter().enumerate() {
+                match render_hook_handler(handler) {
+                    Ok(Some(handler)) => {
+                        rendered_handlers += 1;
+                        rendered_group_handlers.push(handler);
+                    }
+                    Ok(None) => {
+                        omitted_entries += 1;
+                        diagnostics.push(hook_render_diagnostic(
+                            resource,
+                            target,
+                            &format!(
+                                "hook.{event}[{group_index}].hooks[{handler_index}]: omitted unsupported hook handler"
+                            ),
+                        ));
+                    }
+                    Err(message) => {
+                        omitted_entries += 1;
+                        diagnostics.push(hook_render_diagnostic(
+                            resource,
+                            target,
+                            &format!(
+                                "hook.{event}[{group_index}].hooks[{handler_index}]: {message}"
+                            ),
+                        ));
+                    }
+                }
+            }
+
+            if rendered_group_handlers.is_empty() && !handlers.is_empty() {
+                continue;
+            }
+
+            let mut rendered_group = serde_json::Map::new();
+            if let Some(matcher) = matcher {
+                rendered_group.insert("matcher".to_string(), Value::String(matcher));
+            }
+            rendered_group.insert("hooks".to_string(), Value::Array(rendered_group_handlers));
+            rendered_groups.push(Value::Object(rendered_group));
+        }
+
+        if !rendered_groups.is_empty() || groups.is_empty() {
+            rendered_hooks.insert(target_event.to_string(), Value::Array(rendered_groups));
+        }
+    }
+
+    if rendered_hooks.is_empty() {
+        diagnostics.push(hook_render_diagnostic(
+            resource,
+            target,
+            "hook.render: no hook entries had direct render support",
+        ));
+        return Ok((Vec::new(), diagnostics));
+    }
+
+    diagnostics.push(hook_render_diagnostic(
+        resource,
+        target,
+        &format!(
+            "hook.render: rendered {rendered_handlers} command handler(s); omitted {omitted_entries} unsupported hook entries"
+        ),
+    ));
+
+    let mut root = serde_json::Map::new();
+    root.insert("hooks".to_string(), Value::Object(rendered_hooks));
+    let contents = format!(
+        "{}\n",
+        serde_json::to_string_pretty(&Value::Object(root))
+            .map_err(|error| AgentSyncError::Adapter(error.to_string()))?
+    );
+    Ok((
+        vec![RenderedFile {
+            path: hook_target_path(target),
+            contents,
+        }],
+        diagnostics,
+    ))
+}
+
+fn render_hook_event_name(event: &str, source: Agent, target: Agent) -> Option<&str> {
+    if source == target {
+        return Some(event);
+    }
+    match (source, target, event) {
+        (Agent::Codex | Agent::Claude, Agent::Codex | Agent::Claude, "PreToolUse")
+        | (Agent::Codex | Agent::Claude, Agent::Codex | Agent::Claude, "PermissionRequest")
+        | (Agent::Codex | Agent::Claude, Agent::Codex | Agent::Claude, "PostToolUse")
+        | (Agent::Codex | Agent::Claude, Agent::Codex | Agent::Claude, "PreCompact")
+        | (Agent::Codex | Agent::Claude, Agent::Codex | Agent::Claude, "PostCompact")
+        | (Agent::Codex | Agent::Claude, Agent::Codex | Agent::Claude, "SessionStart")
+        | (Agent::Codex | Agent::Claude, Agent::Codex | Agent::Claude, "UserPromptSubmit")
+        | (Agent::Codex | Agent::Claude, Agent::Codex | Agent::Claude, "SubagentStart")
+        | (Agent::Codex | Agent::Claude, Agent::Codex | Agent::Claude, "SubagentStop")
+        | (Agent::Codex | Agent::Claude, Agent::Codex | Agent::Claude, "Stop") => Some(event),
+        _ => None,
+    }
+}
+
+fn render_hook_matcher(
+    matcher: &str,
+    source: Agent,
+    target: Agent,
+) -> Result<Option<String>, String> {
+    if source == target {
+        return Ok(Some(matcher.to_string()));
+    }
+    if matcher.trim().is_empty() {
+        return Ok(Some(matcher.to_string()));
+    }
+    if matcher == "*" {
+        return Ok(Some(matcher.to_string()));
+    }
+    let mut mapped = Vec::new();
+    for token in matcher.split('|') {
+        let token = token.trim();
+        if token.is_empty() {
+            continue;
+        }
+        if has_regex_syntax(token) {
+            return Err(format!(
+                "hook matcher {matcher:?} uses regex syntax that is report-only"
+            ));
+        }
+        let Some(mapped_token) = render_hook_matcher_token(token, source, target) else {
+            return Err(format!(
+                "hook matcher {matcher:?} contains unsupported tool matcher {token:?}"
+            ));
+        };
+        for part in mapped_token.split('|') {
+            if !mapped.iter().any(|existing| existing == part) {
+                mapped.push(part.to_string());
+            }
+        }
+    }
+    if mapped.is_empty() {
+        Err(format!(
+            "hook matcher {matcher:?} did not contain supported tool matchers"
+        ))
+    } else {
+        Ok(Some(mapped.join("|")))
+    }
+}
+
+fn render_hook_matcher_token(token: &str, source: Agent, target: Agent) -> Option<String> {
+    match (source, target, token) {
+        (Agent::Codex, Agent::Claude, "Bash" | "exec_command") => Some("Bash".to_string()),
+        (Agent::Codex, Agent::Claude, "apply_patch") => Some("Write|Edit|MultiEdit".to_string()),
+        (Agent::Codex, Agent::Claude, "spawn_agent") => Some("Agent".to_string()),
+        (Agent::Claude, Agent::Codex, "Bash") => Some("Bash|exec_command".to_string()),
+        (Agent::Claude, Agent::Codex, "Write" | "Edit" | "MultiEdit") => {
+            Some("apply_patch|Write|Edit".to_string())
+        }
+        (Agent::Claude, Agent::Codex, "Agent") => Some("spawn_agent|Agent".to_string()),
+        (_, _, "Read" | "Grep" | "Glob" | "WebFetch" | "WebSearch") => Some(token.to_string()),
+        (_, _, tool) if tool.starts_with("mcp__") => Some(tool.to_string()),
+        (Agent::Codex, Agent::Claude, "Write" | "Edit") => Some(token.to_string()),
+        (Agent::Claude, Agent::Codex, "apply_patch" | "exec_command") => Some(token.to_string()),
+        _ => None,
+    }
+}
+
+fn has_regex_syntax(token: &str) -> bool {
+    token.chars().any(|char| {
+        matches!(
+            char,
+            '^' | '$' | '(' | ')' | '[' | ']' | '{' | '}' | '+' | '?' | '*' | '\\' | '.'
+        )
+    })
+}
+
+fn render_hook_handler(handler: &Value) -> Result<Option<Value>, String> {
+    let Some(handler) = handler.as_object() else {
+        return Err("omitted because handler is not an object".to_string());
+    };
+    let allowed = ["type", "command", "timeout", "statusMessage"];
+    let unsupported = handler
+        .keys()
+        .filter(|key| !allowed.contains(&key.as_str()))
+        .cloned()
+        .collect::<BTreeSet<_>>();
+    if !unsupported.is_empty() {
+        return Err(format!(
+            "omitted unsupported handler fields: {}",
+            unsupported.into_iter().collect::<Vec<_>>().join(", ")
+        ));
+    }
+    if let Some(handler_type) = handler.get("type") {
+        if handler_type.as_str() != Some("command") {
+            return Ok(None);
+        }
+    }
+    let Some(command) = handler.get("command").and_then(Value::as_str) else {
+        return Err("omitted because command handler is missing command".to_string());
+    };
+
+    let mut rendered = serde_json::Map::new();
+    rendered.insert("type".to_string(), Value::String("command".to_string()));
+    rendered.insert("command".to_string(), Value::String(command.to_string()));
+    if let Some(timeout) = handler.get("timeout") {
+        if !timeout.is_u64() {
+            return Err("omitted because timeout is not an unsigned number".to_string());
+        }
+        rendered.insert("timeout".to_string(), timeout.clone());
+    }
+    if let Some(status_message) = handler.get("statusMessage") {
+        if !status_message.is_string() {
+            return Err("omitted because statusMessage is not a string".to_string());
+        }
+        rendered.insert("statusMessage".to_string(), status_message.clone());
+    }
+    Ok(Some(Value::Object(rendered)))
+}
+
+fn hook_target_path(target: Agent) -> PathBuf {
+    match target {
+        Agent::Codex => PathBuf::from(".codex/hooks.json"),
+        Agent::Claude => PathBuf::from(".claude/settings.json"),
+        Agent::CursorCli | Agent::OpenCode => PathBuf::from(format!("{}:hooks", target.as_str())),
+    }
+}
+
+fn hook_render_diagnostic(
+    resource: &NormalizedResource,
+    target: Agent,
+    message: &str,
+) -> Diagnostic {
+    Diagnostic {
+        severity: DiagnosticSeverity::Warning,
+        resource_id: Some(resource.id.clone()),
+        resource_kind: Some(ResourceKind::Hook),
+        agent: Some(target),
+        message: message.to_string(),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1970,7 +2349,7 @@ mod tests {
         );
         assert_eq!(
             capabilities.resources.get(&ResourceKind::Hook),
-            Some(&SupportLevel::Blocked)
+            Some(&SupportLevel::Partial)
         );
         assert_eq!(
             capabilities.fields.get("subagent.instructions"),
@@ -1999,7 +2378,7 @@ mod tests {
     }
 
     #[test]
-    fn codex_adapter_discovers_hooks_json_as_blocked_behavior() {
+    fn codex_adapter_discovers_hooks_json_as_partial_behavior() {
         let dir = tempdir().unwrap();
         fs::create_dir_all(dir.path().join(".codex")).unwrap();
         fs::write(
@@ -2018,14 +2397,14 @@ mod tests {
             .unwrap();
         let resource = CodexAdapter.read(dir.path(), hook).unwrap();
 
-        assert_eq!(resource.support, SupportLevel::Blocked);
+        assert_eq!(resource.support, SupportLevel::Partial);
         assert_eq!(
             resource.native_extensions["behavior.fields"]["hooks"]["PostToolUse"],
             Value::Array(Vec::new())
         );
         assert!(resource.diagnostics.iter().any(|diagnostic| diagnostic
             .message
-            .contains("hook.PreToolUse: blocked executable hook behavior")));
+            .contains("hook.PreToolUse: executable hook behavior requires compatibility mapping")));
     }
 
     #[test]
@@ -2078,7 +2457,7 @@ mod tests {
         );
         assert!(resource.diagnostics.iter().any(|diagnostic| diagnostic
             .message
-            .contains("hook.PreToolUse: blocked executable hook behavior")));
+            .contains("hook.PreToolUse: executable hook behavior requires compatibility mapping")));
     }
 
     #[test]

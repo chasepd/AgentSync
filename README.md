@@ -47,7 +47,7 @@ including the shared rules system in `.cursor/rules` and root-level
 | Rules / context | `CLAUDE.md`, `.claude/CLAUDE.md` | `AGENTS.md` | Cursor CLI rules, `AGENTS.md` where supported | `AGENTS.md`, `opencode.json` / `opencode.jsonc` instructions |
 | Subagents / custom agents | `.claude/agents/*.md` | Codex subagents | blocked until Cursor publishes stable CLI file-format docs | `.opencode/agents/*.md`, `opencode.json` agent config |
 | Skills | `.claude/skills/*/SKILL.md` | Agent Skills / `SKILL.md` folders | Agent Skills / `SKILL.md` folders | `.opencode/skills/*/SKILL.md`, `.agents/skills`, Claude-compatible skills |
-| Hooks / lifecycle automation | Claude Code hooks in settings | `.codex/hooks.json` (blocked behavioral resource) | blocked behavioral resource | OpenCode plugins and events |
+| Hooks / lifecycle automation | Claude Code hooks in settings (partial direct sync with Codex) | `.codex/hooks.json` (partial direct sync with Claude) | report-only until Cursor publishes a hook format | OpenCode plugin events require generated shims |
 | Commands | Claude skills / legacy commands | planned | planned | `.opencode/commands/*.md`, config commands |
 
 Support levels:

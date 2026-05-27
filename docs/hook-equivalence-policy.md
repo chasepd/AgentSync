@@ -3,9 +3,9 @@
 Hooks are executable behavior, so AgentSync maps them entry-by-entry instead of
 treating one unmapped field as a reason to drop the whole resource.
 
-This policy is the contract for future hook rendering. Today, hook resources are
-still discovered read-only unless the renderer explicitly implements one of the
-safe cases below.
+This policy is the contract for hook rendering. Today, AgentSync renders the
+direct Codex CLI <-> Claude Code command-hook subset and keeps shim-required or
+report-only entries as diagnostics/native extensions.
 
 ## Mapping Outcomes
 
@@ -18,9 +18,9 @@ safe cases below.
 - `report-only`: no safe target representation is known. AgentSync must preserve
   native data and emit a note explaining what was not rendered.
 
-Partial hook rendering is allowed only when every rendered entry includes
-diagnostics for dropped or emulated behavior. Unsupported entries must stay
-visible in the plan/report and must not be silently omitted.
+Partial hook rendering is allowed only when every plan includes diagnostics for
+dropped or emulated behavior. Unsupported entries must stay visible in the
+plan/report and must not be silently omitted.
 
 ## Event Equivalence
 
@@ -32,7 +32,7 @@ visible in the plan/report and must not be silently omitted.
 | `session.start` | `SessionStart` direct | `SessionStart` direct | `session.created` shim-required | report-only |
 | `prompt.submit` | `UserPromptSubmit` direct | `UserPromptSubmit` direct | report-only | report-only |
 | `compact.before` | `PreCompact` direct | `PreCompact` direct | `experimental.session.compacting` shim-required | report-only |
-| `compact.after` | `PostCompact` direct | report-only | `session.compacted` shim-required | report-only |
+| `compact.after` | `PostCompact` direct | `PostCompact` direct | `session.compacted` shim-required | report-only |
 | `agent.start` | `SubagentStart` direct | `SubagentStart` direct | report-only | report-only |
 | `agent.stop` | `SubagentStop` direct | `SubagentStop` direct | report-only | report-only |
 | `session.stop` | `Stop` direct | `Stop` direct | report-only | report-only |

@@ -1465,12 +1465,12 @@ fn sync_command_with_shell_output_is_blocked_before_state_or_target_write() {
 }
 
 #[test]
-fn diff_hook_returns_blocked_plan() {
+fn diff_hook_returns_rendered_plan() {
     let dir = tempdir().unwrap();
     fs::create_dir_all(dir.path().join(".claude")).unwrap();
     fs::write(
         dir.path().join(".claude/settings.json"),
-        r#"{"hooks":{"PreToolUse":[]}}"#,
+        r#"{"hooks":{"PreToolUse":[{"matcher":"Bash","hooks":[{"type":"command","command":"echo hi"}]}]}}"#,
     )
     .unwrap();
 
@@ -1487,24 +1487,29 @@ fn diff_hook_returns_blocked_plan() {
         .clone();
     let json: Value = serde_json::from_slice(&output).unwrap();
 
-    assert_eq!(json["actions"][0]["action"], "block");
+    assert_eq!(json["actions"][0]["action"], "create");
     assert_eq!(
         json["actions"][0]["resource_id"],
         "hooks:claude:.claude/settings.json"
     );
+    assert_eq!(json["actions"][0]["path"], ".codex/hooks.json");
+    assert!(json["actions"][0]["rendered"]["contents"]
+        .as_str()
+        .unwrap()
+        .contains("\"matcher\": \"Bash|exec_command\""));
     assert!(json["diagnostics"][0]["message"]
         .as_str()
         .unwrap()
-        .contains("behavioral resources are blocked"));
+        .contains("hook.render: rendered 1 command handler"));
 }
 
 #[test]
-fn diff_codex_hook_returns_blocked_plan() {
+fn diff_codex_hook_returns_rendered_plan() {
     let dir = tempdir().unwrap();
     fs::create_dir_all(dir.path().join(".codex")).unwrap();
     fs::write(
         dir.path().join(".codex/hooks.json"),
-        r#"{"hooks":{"PreToolUse":[]}}"#,
+        r#"{"hooks":{"PostToolUse":[{"matcher":"apply_patch","hooks":[{"type":"command","command":"echo edited"}]}]}}"#,
     )
     .unwrap();
 
@@ -1521,24 +1526,29 @@ fn diff_codex_hook_returns_blocked_plan() {
         .clone();
     let json: Value = serde_json::from_slice(&output).unwrap();
 
-    assert_eq!(json["actions"][0]["action"], "block");
+    assert_eq!(json["actions"][0]["action"], "create");
     assert_eq!(
         json["actions"][0]["resource_id"],
         "hooks:codex:.codex/hooks.json"
     );
+    assert_eq!(json["actions"][0]["path"], ".claude/settings.json");
+    assert!(json["actions"][0]["rendered"]["contents"]
+        .as_str()
+        .unwrap()
+        .contains("\"matcher\": \"Write|Edit|MultiEdit\""));
     assert!(json["diagnostics"][0]["message"]
         .as_str()
         .unwrap()
-        .contains("behavioral resources are blocked"));
+        .contains("hook.render: rendered 1 command handler"));
 }
 
 #[test]
-fn sync_hook_write_is_blocked_before_state_write() {
+fn sync_hook_write_creates_target_and_state() {
     let dir = tempdir().unwrap();
     fs::create_dir_all(dir.path().join(".claude")).unwrap();
     fs::write(
         dir.path().join(".claude/settings.json"),
-        r#"{"hooks":{"PreToolUse":[]}}"#,
+        r#"{"hooks":{"PreToolUse":[{"matcher":"Bash","hooks":[{"type":"command","command":"echo hi"}]}]}}"#,
     )
     .unwrap();
 
@@ -1547,6 +1557,30 @@ fn sync_hook_write_is_blocked_before_state_write() {
         .current_dir(dir.path())
         .args([
             "sync", "hooks", "--from", "claude", "--to", "codex", "--write",
+        ])
+        .assert()
+        .success();
+
+    let rendered = fs::read_to_string(dir.path().join(".codex/hooks.json")).unwrap();
+    assert!(rendered.contains("\"matcher\": \"Bash|exec_command\""));
+    assert!(dir.path().join(".agentsync/state.json").exists());
+}
+
+#[test]
+fn sync_unsupported_hook_target_is_blocked_before_state_write() {
+    let dir = tempdir().unwrap();
+    fs::create_dir_all(dir.path().join(".claude")).unwrap();
+    fs::write(
+        dir.path().join(".claude/settings.json"),
+        r#"{"hooks":{"PreToolUse":[{"matcher":"Bash","hooks":[{"type":"command","command":"echo hi"}]}]}}"#,
+    )
+    .unwrap();
+
+    Command::cargo_bin("agentsync")
+        .unwrap()
+        .current_dir(dir.path())
+        .args([
+            "sync", "hooks", "--from", "claude", "--to", "cursor", "--write",
         ])
         .assert()
         .failure();
