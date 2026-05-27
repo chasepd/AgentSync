@@ -12,10 +12,11 @@ AgentSync is dry-run first. Commands that can change files must require
 - Warn on partial conversions.
 - Block unsafe lossy conversions by default.
 - Never execute generated hooks, plugins, commands, or skills.
+- Hook rendering must follow `docs/hook-equivalence-policy.md`: render only
+  directly equivalent entries or implemented shims, and report everything else.
 
 ## Conflict Handling
 
 Conflicts can be resolved with an explicit source of truth, a strategy such as
 `newest`, or an interactive resolver. Without one of those choices, AgentSync
 should report the conflict and avoid writing.
-

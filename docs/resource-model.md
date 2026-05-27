@@ -38,8 +38,10 @@ command resources.
 
 Hooks follow the same safety model. Claude settings files and Codex
 `.codex/hooks.json` files with a top-level `hooks` field are discovered as hook
-resources, and `diff hook` / `sync hooks` return blocked plan actions until hook
-conversion has an explicit safety design.
+resources. Hook conversion uses the entry-by-entry policy in
+`docs/hook-equivalence-policy.md`: directly equivalent entries may become
+partial render candidates, shim-required entries need generated adapters, and
+report-only entries remain diagnostics/native extensions.
 
 Blocked behavioral resources preserve their raw native file text in native
 extensions so scan/status output can surface what was blocked without rendering

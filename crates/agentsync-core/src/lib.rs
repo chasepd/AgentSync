@@ -1,6 +1,7 @@
 pub mod adapters;
 pub mod config;
 pub mod diagnostics;
+pub mod hook_policy;
 pub mod model;
 pub mod report;
 pub mod state;
@@ -21,6 +22,10 @@ use state::{load_state, save_state, StateFile, StateResource, StateTarget};
 
 pub use adapters::{AdapterRegistry, AgentAdapter};
 pub use diagnostics::{AgentSyncError, Diagnostic, DiagnosticSeverity};
+pub use hook_policy::{
+    hook_event_equivalence, hook_tool_equivalence, AgentHookMapping, HookEquivalence,
+    HookMappingSupport, HOOK_EVENT_EQUIVALENCE, HOOK_TOOL_EQUIVALENCE,
+};
 pub use model::{
     Agent, ConflictStrategy, DiscoveryRoots, PlanOptions, ResourceFilter, ResourceKind,
     ResourceSelector, Scope, SourceAlias,

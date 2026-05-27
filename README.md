@@ -350,7 +350,10 @@ Examples:
 
 - A Claude Code subagent written as Markdown frontmatter may not map perfectly to another tool's custom-agent schema.
 - A sandbox or permission policy in one tool may not have an equivalent in another.
-- Hook systems vary widely. Some are declarative config, while others are executable plugin code.
+- Hook systems vary widely. AgentSync defines the hook equivalence policy in
+  `docs/hook-equivalence-policy.md` so future hook rendering can handle direct
+  entries separately from entries that need generated shims or report-only
+  diagnostics.
 - Cursor CLI rules and `AGENTS.md` instructions may overlap but are not always equivalent.
 - OpenCode `opencode.json` / `opencode.jsonc` rules are read from literal `instructions` file paths.
   Glob patterns are reported as partial until AgentSync grows deterministic glob expansion.
@@ -556,7 +559,8 @@ Hooks, plugins, commands, and executable skills can run code. AgentSync treats t
 
 AgentSync will:
 
-- Report hooks, plugins, permissions, and executable behavior as blocked.
+- Report unsupported hooks, plugins, permissions, and executable behavior as
+  blocked or partial according to the compatibility policy.
 - Preserve native fields where possible.
 - Refuse to auto-run generated scripts.
 - Sync only resources with safe render semantics.
