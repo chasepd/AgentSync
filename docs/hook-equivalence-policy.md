@@ -4,8 +4,9 @@ Hooks are executable behavior, so AgentSync maps them entry-by-entry instead of
 treating one unmapped field as a reason to drop the whole resource.
 
 This policy is the contract for hook rendering. Today, AgentSync renders the
-direct Codex CLI, Claude Code, and Cursor command-hook subset and keeps
-shim-required or report-only entries as diagnostics/native extensions.
+direct Codex CLI, Claude Code, and Cursor command-hook subset, plus supported
+OpenCode plugin shims, and keeps unsupported shim-required or report-only
+entries as diagnostics/native extensions.
 
 ## Mapping Outcomes
 
@@ -28,7 +29,7 @@ plan/report and must not be silently omitted.
 | --- | --- | --- | --- | --- |
 | `tool.before` | `PreToolUse` direct | `PreToolUse` direct | `tool.execute.before` shim-required | `preToolUse` direct |
 | `tool.after` | `PostToolUse` direct | `PostToolUse` direct | `tool.execute.after` shim-required | `postToolUse` direct |
-| `permission.request` | `PermissionRequest` direct | `PermissionRequest` direct | `permission.asked` shim-required | report-only |
+| `permission.request` | `PermissionRequest` direct | `PermissionRequest` direct | `permission.ask` shim-required | report-only |
 | `session.start` | `SessionStart` direct | `SessionStart` direct | `session.created` shim-required | `sessionStart` direct |
 | `prompt.submit` | `UserPromptSubmit` direct | `UserPromptSubmit` direct | report-only | `beforeSubmitPrompt` direct |
 | `compact.before` | `PreCompact` direct | `PreCompact` direct | `experimental.session.compacting` shim-required | `preCompact` direct |
@@ -38,10 +39,12 @@ plan/report and must not be silently omitted.
 | `session.stop` | `Stop` direct | `Stop` direct | report-only | `stop` direct |
 
 OpenCode mappings are shim-required because OpenCode exposes hooks as plugins,
-not as JSON command-hook declarations. Rendering a Claude/Codex command hook to
-OpenCode requires generated plugin code that runs the command, passes compatible
-JSON on stdin, interprets the command output, and maps blocking decisions to
-OpenCode plugin behavior.
+not as JSON command-hook declarations. AgentSync renders supported
+Claude/Codex/Cursor command hooks to `.opencode/plugins/agentsync-hooks.js`.
+The generated plugin runs the original command, passes adapted JSON on stdin,
+and maps nonzero exit or `{"decision":"block"}` / `{"block":true}` output to
+OpenCode plugin errors. OpenCode events or matchers without a safe implemented
+adapter remain report-only.
 
 Cursor documents native `.cursor/hooks.json` command hooks. AgentSync renders
 only the direct event subset above. Cursor-specific events such as
@@ -88,13 +91,16 @@ Cursor hook definitions do not support it. Cursor `failClosed`, `loop_limit`,
 prompt hooks, and Cursor-only matcher surfaces are report-only.
 
 When rendering into OpenCode, every command hook is `shim-required`; the source
-command can be reused, but wrapper generation must adapt stdin/stdout.
+command is reused, but wrapper generation adapts stdin/stdout. The current shim
+does not rewrite OpenCode tool args or compact prompts from hook stdout; those
+native output mutations remain report-only.
 
 ## Planning Rules
 
 1. Normalize hook entries into canonical event plus canonical matcher class.
 2. Render entries with `direct` mappings when all handler fields are supported.
-3. Render `shim-required` entries only after the shim renderer exists.
+3. Render `shim-required` entries only when an implemented shim covers the
+   source event, matcher, and handler fields.
 4. Preserve report-only entries in diagnostics and native extensions.
 5. Mark the hook resource `partial` when at least one entry is rendered and at
    least one entry is omitted or shimmed.
@@ -116,10 +122,14 @@ command can be reused, but wrapper generation must adapt stdin/stdout.
   https://github.com/openai/codex
 - AgentSync also treats `exec_command` as a Codex-compatible shell matcher
   because Codex API sessions can expose the shell tool under that name.
-- OpenCode documents plugin hooks and event names, including
-  `tool.execute.before`, `tool.execute.after`, `permission.asked`,
-  `session.created`, and `experimental.session.compacting`:
+- OpenCode documents local `.opencode/plugins` auto-loading plus plugin hooks
+  and event names, including `tool.execute.before`, `tool.execute.after`,
+  `permission.asked`, `session.created`, and
+  `experimental.session.compacting`:
   https://opencode.ai/docs/plugins/
+- The OpenCode plugin package type exposes the decision-capable
+  `permission.ask` hook used by AgentSync for permission request shims:
+  https://github.com/sst/opencode/blob/dev/packages/plugin/src/index.ts
 - OpenCode documents built-in tool names including `bash`, `edit`, `write`,
   `read`, `grep`, `glob`, `apply_patch`, `webfetch`, and `websearch`:
   https://opencode.ai/docs/tools/

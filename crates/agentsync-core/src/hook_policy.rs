@@ -90,8 +90,8 @@ pub const HOOK_EVENT_EQUIVALENCE: &[HookEquivalence] = &[
             direct(Agent::Claude, "PermissionRequest"),
             shim(
                 Agent::OpenCode,
-                "permission.asked",
-                "permission decision contracts are not JSON-hook compatible",
+                "permission.ask",
+                "requires a generated plugin wrapper to adapt permission decision output",
             ),
             report_only(
                 Agent::CursorCli,

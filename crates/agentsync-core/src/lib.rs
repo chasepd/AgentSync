@@ -588,7 +588,10 @@ pub fn plan_filters_with_options_and_adapters(
                         source.source_agent,
                         Agent::Codex | Agent::Claude | Agent::CursorCli
                     )
-                    || !matches!(*target, Agent::Codex | Agent::Claude | Agent::CursorCli))
+                    || !matches!(
+                        *target,
+                        Agent::Codex | Agent::Claude | Agent::CursorCli | Agent::OpenCode
+                    ))
             {
                 diagnostics.extend(source.diagnostics.clone());
                 actions.push(block_action(source, *target, "non-portable"));
@@ -3157,6 +3160,103 @@ mod tests {
     }
 
     #[test]
+    fn hook_plan_renders_codex_hooks_to_opencode_plugin() {
+        let dir = tempdir().unwrap();
+        fs::create_dir_all(dir.path().join(".codex")).unwrap();
+        fs::write(
+            dir.path().join(".codex/hooks.json"),
+            r#"{"hooks":{"PreToolUse":[{"matcher":"apply_patch","hooks":[{"type":"command","command":"echo write","timeout":5,"statusMessage":"Checking"}]},{"matcher":"exec_command","hooks":[{"type":"command","command":"echo shell"}]}],"PermissionRequest":[{"hooks":[{"type":"command","command":"echo permission"}]}],"SessionStart":[{"hooks":[{"type":"command","command":"echo session"}]}],"Stop":[{"hooks":[{"type":"command","command":"echo stop"}]}]}}"#,
+        )
+        .unwrap();
+
+        let report = plan(
+            dir.path(),
+            ResourceSelector::Hooks,
+            SourceAlias::Codex,
+            &[Agent::OpenCode],
+        )
+        .unwrap();
+
+        assert_eq!(report.actions[0].action, PlanActionKind::Create);
+        let rendered = report.actions[0].rendered.as_ref().unwrap();
+        assert_eq!(
+            rendered.path,
+            Path::new(".opencode/plugins/agentsync-hooks.js")
+        );
+        assert!(rendered
+            .contents
+            .contains("\"event\": \"tool.execute.before\""));
+        assert!(rendered.contents.contains("\"event\": \"permission.ask\""));
+        assert!(rendered.contents.contains("\"event\": \"session.created\""));
+        assert!(rendered.contents.contains("\"tools\": [\n      \"edit\""));
+        assert!(rendered.contents.contains("\"bash\""));
+        assert!(rendered.contents.contains("\"command\": \"echo write\""));
+        assert!(rendered.contents.contains("\"timeoutSeconds\": 5"));
+        assert!(!rendered.contents.contains("echo stop"));
+        assert!(report.diagnostics.iter().any(|diagnostic| diagnostic
+            .message
+            .contains("omitted statusMessage because OpenCode plugin shims do not support it")));
+        assert!(report.diagnostics.iter().any(|diagnostic| diagnostic
+            .message
+            .contains("hook.Stop: report-only; no OpenCode plugin event mapping")));
+        assert!(report
+            .diagnostics
+            .iter()
+            .any(|diagnostic| diagnostic.message.contains("OpenCode shim reuses commands")));
+    }
+
+    #[test]
+    fn hook_plan_blocks_opencode_when_no_entries_are_renderable() {
+        let dir = tempdir().unwrap();
+        fs::create_dir_all(dir.path().join(".claude")).unwrap();
+        fs::write(
+            dir.path().join(".claude/settings.json"),
+            r#"{"hooks":{"UserPromptSubmit":[{"hooks":[{"type":"command","command":"echo prompt"}]}]}}"#,
+        )
+        .unwrap();
+
+        let report = plan(
+            dir.path(),
+            ResourceSelector::Hooks,
+            SourceAlias::Claude,
+            &[Agent::OpenCode],
+        )
+        .unwrap();
+
+        assert_eq!(report.actions[0].action, PlanActionKind::Block);
+        assert!(report.actions[0].rendered.is_none());
+        assert!(report.diagnostics.iter().any(|diagnostic| diagnostic
+            .message
+            .contains("no hook entries had OpenCode plugin render support")));
+    }
+
+    #[test]
+    fn hook_plan_writes_opencode_plugin_and_state() {
+        let dir = tempdir().unwrap();
+        fs::create_dir_all(dir.path().join(".claude")).unwrap();
+        fs::write(
+            dir.path().join(".claude/settings.json"),
+            r#"{"hooks":{"PreToolUse":[{"matcher":"Bash","hooks":[{"type":"command","command":"echo hi"}]}]}}"#,
+        )
+        .unwrap();
+
+        let report = plan(
+            dir.path(),
+            ResourceSelector::Hooks,
+            SourceAlias::Claude,
+            &[Agent::OpenCode],
+        )
+        .unwrap();
+
+        assert_eq!(report.actions[0].action, PlanActionKind::Create);
+        write_plan(dir.path(), &report).unwrap();
+        let rendered =
+            fs::read_to_string(dir.path().join(".opencode/plugins/agentsync-hooks.js")).unwrap();
+        assert!(rendered.contains("\"tool.execute.before\""));
+        assert!(dir.path().join(".agentsync/state.json").exists());
+    }
+
+    #[test]
     fn hook_plan_omits_cursor_only_events_when_targeting_claude() {
         let dir = tempdir().unwrap();
         fs::create_dir_all(dir.path().join(".cursor")).unwrap();
@@ -3250,12 +3350,12 @@ mod tests {
     }
 
     #[test]
-    fn unsupported_hook_target_still_blocks() {
+    fn unsupported_opencode_hook_entries_still_block() {
         let dir = tempdir().unwrap();
         fs::create_dir_all(dir.path().join(".claude")).unwrap();
         fs::write(
             dir.path().join(".claude/settings.json"),
-            r#"{"hooks":{"PreToolUse":[{"matcher":"Bash","hooks":[{"type":"command","command":"echo hi"}]}]}}"#,
+            r#"{"hooks":{"SubagentStart":[{"hooks":[{"type":"command","command":"echo hi"}]}]}}"#,
         )
         .unwrap();
 

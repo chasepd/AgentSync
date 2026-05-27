@@ -1605,6 +1605,48 @@ fn diff_cursor_hook_to_codex_returns_rendered_plan() {
 }
 
 #[test]
+fn diff_codex_hook_to_opencode_returns_rendered_plugin_plan() {
+    let dir = tempdir().unwrap();
+    fs::create_dir_all(dir.path().join(".codex")).unwrap();
+    fs::write(
+        dir.path().join(".codex/hooks.json"),
+        r#"{"hooks":{"PreToolUse":[{"matcher":"exec_command","hooks":[{"type":"command","command":"echo shell"}]}]}}"#,
+    )
+    .unwrap();
+
+    let output = Command::cargo_bin("agentsync")
+        .unwrap()
+        .current_dir(dir.path())
+        .args([
+            "diff", "hook", "--from", "codex", "--to", "opencode", "--format", "json",
+        ])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let json: Value = serde_json::from_slice(&output).unwrap();
+
+    assert_eq!(json["actions"][0]["action"], "create");
+    assert_eq!(
+        json["actions"][0]["path"],
+        ".opencode/plugins/agentsync-hooks.js"
+    );
+    let contents = json["actions"][0]["rendered"]["contents"].as_str().unwrap();
+    assert!(contents.contains("\"event\": \"tool.execute.before\""));
+    assert!(contents.contains("\"tools\": [\n      \"bash\""));
+    assert!(contents.contains("\"command\": \"echo shell\""));
+    assert!(json["diagnostics"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|diagnostic| diagnostic["message"]
+            .as_str()
+            .unwrap()
+            .contains("OpenCode shim reuses commands")));
+}
+
+#[test]
 fn sync_hook_write_creates_target_and_state() {
     let dir = tempdir().unwrap();
     fs::create_dir_all(dir.path().join(".claude")).unwrap();
@@ -1629,12 +1671,38 @@ fn sync_hook_write_creates_target_and_state() {
 }
 
 #[test]
-fn sync_unsupported_hook_target_is_blocked_before_state_write() {
+fn sync_opencode_hook_write_creates_plugin_and_state() {
     let dir = tempdir().unwrap();
     fs::create_dir_all(dir.path().join(".claude")).unwrap();
     fs::write(
         dir.path().join(".claude/settings.json"),
         r#"{"hooks":{"PreToolUse":[{"matcher":"Bash","hooks":[{"type":"command","command":"echo hi"}]}]}}"#,
+    )
+    .unwrap();
+
+    Command::cargo_bin("agentsync")
+        .unwrap()
+        .current_dir(dir.path())
+        .args([
+            "sync", "hooks", "--from", "claude", "--to", "opencode", "--write",
+        ])
+        .assert()
+        .success();
+
+    let rendered =
+        fs::read_to_string(dir.path().join(".opencode/plugins/agentsync-hooks.js")).unwrap();
+    assert!(rendered.contains("\"tool.execute.before\""));
+    assert!(rendered.contains("\"bash\""));
+    assert!(dir.path().join(".agentsync/state.json").exists());
+}
+
+#[test]
+fn sync_unsupported_opencode_hook_entries_are_blocked_before_state_write() {
+    let dir = tempdir().unwrap();
+    fs::create_dir_all(dir.path().join(".claude")).unwrap();
+    fs::write(
+        dir.path().join(".claude/settings.json"),
+        r#"{"hooks":{"SubagentStart":[{"hooks":[{"type":"command","command":"echo hi"}]}]}}"#,
     )
     .unwrap();
 

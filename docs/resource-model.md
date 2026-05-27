@@ -41,16 +41,20 @@ Hooks follow the same safety model. Claude settings files, Codex
 top-level `hooks` field are discovered as hook resources. Hook conversion uses
 the entry-by-entry policy in `docs/hook-equivalence-policy.md`: directly
 equivalent Codex/Claude/Cursor command hooks are partial render candidates,
-shim-required entries need generated adapters, and report-only entries remain
-diagnostics/native extensions.
+OpenCode shim-required entries can render to
+`.opencode/plugins/agentsync-hooks.js` when AgentSync has implemented the event
+and matcher adapter, and report-only entries remain diagnostics/native
+extensions.
 
 Blocked behavioral resources preserve their raw native file text in native
 extensions so scan/status output can surface what was blocked without rendering
 or writing it.
 
-Plugins are discovered read-only when they appear in OpenCode plugin directories
-or OpenCode JSON/JSONC plugin config. They are blocked resources in the MVP and
-are not selectable for diff/sync rendering.
+Native OpenCode plugins are discovered read-only when they appear in OpenCode
+plugin directories or OpenCode JSON/JSONC plugin config. They are blocked
+resources in the MVP and are not selectable for diff/sync rendering. The
+generated AgentSync OpenCode hook shim is a hook render target, not a portable
+plugin resource.
 
 Permission policy is discovered read-only from Claude settings and OpenCode
 JSON/JSONC config. It is blocked in the MVP because permission semantics are

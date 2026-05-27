@@ -23,4 +23,5 @@ Each adapter provides:
   command hooks. This target is not Cursor IDE workspace automation.
 - OpenCode: `AGENTS.md`, `.opencode/agents`, `.opencode/commands`,
   `.opencode/skills`, `opencode.json` / `opencode.jsonc` instructions, and
-  OpenCode agent/command/plugin/permission config.
+  OpenCode agent/command/plugin/permission config. Supported hook entries render
+  as generated local plugin shims in `.opencode/plugins/agentsync-hooks.js`.
