@@ -75,6 +75,7 @@ fn parse_scope(value: &str) -> Result<Scope, String> {
 
 fn parse_source(value: &str) -> Result<SourceAlias, String> {
     match value {
+        "all" => Ok(SourceAlias::All),
         "agents-md" => Ok(SourceAlias::AgentsMd),
         "codex" => Ok(SourceAlias::Codex),
         "claude" => Ok(SourceAlias::Claude),
@@ -122,7 +123,7 @@ where
         type Value = Vec<Agent>;
 
         fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-            formatter.write_str("a list of target agent names")
+            formatter.write_str("a list of target agent names or all")
         }
 
         fn visit_seq<A>(self, mut seq: A) -> Result<Self::Value, A::Error>
@@ -131,7 +132,18 @@ where
         {
             let mut agents = Vec::new();
             while let Some(value) = seq.next_element::<String>()? {
-                agents.push(parse_agent(&value).map_err(de::Error::custom)?);
+                if value == "all" {
+                    for agent in Agent::ALL {
+                        if !agents.contains(&agent) {
+                            agents.push(agent);
+                        }
+                    }
+                } else {
+                    let agent = parse_agent(&value).map_err(de::Error::custom)?;
+                    if !agents.contains(&agent) {
+                        agents.push(agent);
+                    }
+                }
             }
             Ok(agents)
         }
@@ -164,6 +176,22 @@ targets = ["claude", "cursor-cli", "opencode"]
             config.defaults.targets,
             vec![Agent::Claude, Agent::CursorCli, Agent::OpenCode]
         );
+    }
+
+    #[test]
+    fn config_accepts_all_source_and_targets() {
+        let config = toml::from_str::<ConfigFile>(
+            r#"schema_version = 1
+
+[defaults]
+source = "all"
+targets = ["all"]
+"#,
+        )
+        .unwrap();
+
+        assert_eq!(config.defaults.source, Some(SourceAlias::All));
+        assert_eq!(config.defaults.targets, Agent::ALL.to_vec());
     }
 
     #[test]

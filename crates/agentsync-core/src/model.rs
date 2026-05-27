@@ -23,6 +23,8 @@ pub enum Agent {
 }
 
 impl Agent {
+    pub const ALL: [Self; 4] = [Self::Codex, Self::Claude, Self::CursorCli, Self::OpenCode];
+
     pub fn as_str(self) -> &'static str {
         match self {
             Self::Claude => "claude",
@@ -265,6 +267,7 @@ pub enum ConflictStrategy {
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum SourceAlias {
+    All,
     AgentsMd,
     Codex,
     Claude,

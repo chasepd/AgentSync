@@ -105,6 +105,12 @@ Sync every matching resource kind from the selected source:
 agentsync sync --all --from claude --to codex,opencode
 ```
 
+Or let AgentSync pick the changed source and render every target:
+
+```bash
+agentsync sync --all --from all --to all
+```
+
 Preview changes first:
 
 ```bash
@@ -251,6 +257,12 @@ Use one format as source of truth:
 agentsync sync --all --from claude --to codex,opencode --write
 ```
 
+Sync from whichever tracked source changed:
+
+```bash
+agentsync sync --all --from all --to all --write
+```
+
 Prefer the newest changed file:
 
 ```bash
@@ -321,6 +333,13 @@ agentsync sync --all --write
 `rules = false` or `skills = false` blocks those default-based commands before
 any write. New configs default blocked behavioral resources to disabled:
 `subagents = false`, `commands = false`, and `hooks = false`.
+
+Use `source = "all"` and `targets = ["all"]` when contributors may edit
+different native tools and you want `agentsync sync --all --write` to deploy the
+changed source to every supported target. If multiple sources for the same
+resource changed differently, AgentSync stops and asks for an explicit `--from`.
+On repos without existing `.agentsync/state.json` metadata, use an explicit
+`--from` for the first sync if native files already disagree.
 
 ## Conversion notes
 
@@ -395,6 +414,7 @@ Generate or update target formats.
 ```bash
 agentsync sync --all --from claude --to codex,opencode --dry-run
 agentsync sync --all --from claude --to codex,opencode --write
+agentsync sync --all --from all --to all --write
 agentsync sync rules --from claude --to codex --format json
 agentsync sync skill pr-review --from claude --to codex --write
 agentsync sync --all --write
@@ -494,17 +514,17 @@ jobs:
   sync:
     uses: chasepd/AgentSync/.github/workflows/agentsync-sync-pr.yml@main
     with:
-      sync-command: agentsync sync --all --from agents-md --to claude,cursor,opencode --write
       branch: agentsync/auto-sync
       pr-title: Sync agent configuration
 ```
 
 By default, the reusable workflow installs AgentSync from `chasepd/AgentSync`
-at `main`. Pin `agentsync-ref` to a release tag or commit for stricter
-reproducibility. The default `GITHUB_TOKEN` can create the sync branch and PR
-when the caller grants `contents: write` and `pull-requests: write` and the
-repository enables **Settings -> Actions -> General -> Workflow permissions ->
-Allow GitHub Actions to create and approve pull requests**.
+at `main` and runs `agentsync sync --all --from all --to all --write`. Pin
+`agentsync-ref` to a release tag or commit for stricter reproducibility. The
+default `GITHUB_TOKEN` can create the sync branch and PR when the caller grants
+`contents: write` and `pull-requests: write` and the repository enables
+**Settings -> Actions -> General -> Workflow permissions -> Allow GitHub Actions
+to create and approve pull requests**.
 
 Pass a custom `token` secret if your repo cannot enable that setting or needs
 PR-created workflows to trigger:

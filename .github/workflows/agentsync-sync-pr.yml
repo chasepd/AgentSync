@@ -22,7 +22,7 @@ on:
         description: AgentSync command to run. It must include explicit write intent.
         required: false
         type: string
-        default: agentsync sync --all --from agents-md --to claude,cursor,opencode --write
+        default: agentsync sync --all --from all --to all --write
       base-branch:
         description: Pull request base branch. Defaults to the triggering ref.
         required: false

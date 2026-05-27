@@ -148,6 +148,7 @@ enum CliResource {
 
 #[derive(Clone, Debug, ValueEnum)]
 enum CliSource {
+    All,
     AgentsMd,
     Codex,
     Claude,
@@ -158,6 +159,7 @@ enum CliSource {
 
 #[derive(Clone, Debug, ValueEnum)]
 enum CliAgent {
+    All,
     Codex,
     Claude,
     #[value(name = "cursor", alias = "cursor-cli")]
@@ -218,22 +220,12 @@ impl From<CliResource> for ResourceSelector {
 impl From<CliSource> for SourceAlias {
     fn from(value: CliSource) -> Self {
         match value {
+            CliSource::All => Self::All,
             CliSource::AgentsMd => Self::AgentsMd,
             CliSource::Codex => Self::Codex,
             CliSource::Claude => Self::Claude,
             CliSource::Cursor => Self::CursorCli,
             CliSource::Opencode => Self::OpenCode,
-        }
-    }
-}
-
-impl From<CliAgent> for Agent {
-    fn from(value: CliAgent) -> Self {
-        match value {
-            CliAgent::Codex => Self::Codex,
-            CliAgent::Claude => Self::Claude,
-            CliAgent::Cursor => Self::CursorCli,
-            CliAgent::Opencode => Self::OpenCode,
         }
     }
 }
@@ -473,6 +465,30 @@ fn plan_options(no_overwrite: bool, strategy: Option<CliConflictStrategy>) -> Pl
     }
 }
 
+fn expand_cli_targets(to: Vec<CliAgent>) -> Vec<Agent> {
+    let mut targets = Vec::new();
+    for target in to {
+        match target {
+            CliAgent::All => {
+                for agent in Agent::ALL {
+                    push_target(&mut targets, agent);
+                }
+            }
+            CliAgent::Codex => push_target(&mut targets, Agent::Codex),
+            CliAgent::Claude => push_target(&mut targets, Agent::Claude),
+            CliAgent::Cursor => push_target(&mut targets, Agent::CursorCli),
+            CliAgent::Opencode => push_target(&mut targets, Agent::OpenCode),
+        }
+    }
+    targets
+}
+
+fn push_target(targets: &mut Vec<Agent>, agent: Agent) {
+    if !targets.contains(&agent) {
+        targets.push(agent);
+    }
+}
+
 fn resolve_interactive_conflicts(report: &mut PlanReport) -> Result<(), AgentSyncError> {
     let conflict_indexes = report
         .actions
@@ -556,7 +572,7 @@ fn resolve_plan_args(
             .map(|config| config.defaults.targets.clone())
             .unwrap_or_default()
     } else {
-        to.into_iter().map(Agent::from).collect()
+        expand_cli_targets(to)
     };
     if targets.is_empty() {
         return Err(AgentSyncError::InvalidArgument(
@@ -611,7 +627,7 @@ fn resolve_sync_plan_args(
             .map(|config| config.defaults.targets.clone())
             .unwrap_or_default()
     } else {
-        to.into_iter().map(Agent::from).collect()
+        expand_cli_targets(to)
     };
     if targets.is_empty() {
         return Err(AgentSyncError::InvalidArgument(
