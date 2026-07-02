@@ -286,7 +286,8 @@ AgentSync should be boringly safe by default:
 
 - Dry run unless `--write` is passed.
 - Show diffs before overwriting.
-- Back up changed files.
+- Use transient recovery for overwritten files, without retaining `.bak` files after successful writes.
+- Retain `.bak` backups only when `sync --retain-backups --write` is passed.
 - Preserve unknown fields where possible.
 - Warn when a conversion loses semantics.
 
@@ -419,6 +420,7 @@ Generate or update target formats.
 agentsync sync --all --from claude --to codex,opencode --dry-run
 agentsync sync --all --from claude --to codex,opencode --write
 agentsync sync --all --from all --to all --write
+agentsync sync --all --retain-backups --write
 agentsync sync rules --from claude --to codex --format json
 agentsync sync skill pr-review --from claude --to codex --write
 agentsync sync --all --write

@@ -29,7 +29,7 @@ pub use hook_policy::{
 };
 pub use model::{
     Agent, ConflictStrategy, DiscoveryRoots, PlanOptions, ResourceFilter, ResourceKind,
-    ResourceSelector, Scope, SourceAlias,
+    ResourceSelector, Scope, SourceAlias, WriteOptions,
 };
 pub use report::PlanConflictChoice;
 
@@ -754,12 +754,31 @@ fn source_modified_time(
 }
 
 pub fn write_plan(root: impl AsRef<Path>, report: &PlanReport) -> Result<(), AgentSyncError> {
+    write_plan_with_options(root, report, WriteOptions::default())
+}
+
+pub fn write_plan_with_options(
+    root: impl AsRef<Path>,
+    report: &PlanReport,
+    options: WriteOptions,
+) -> Result<(), AgentSyncError> {
     let root = root.as_ref();
     if report.has_blocking_issues() {
         return Err(AgentSyncError::InvalidArgument(
             "planned write contains blocking issues".to_string(),
         ));
     }
+    if options.retain_backups {
+        return write_plan_with_retained_backups(root, report);
+    }
+
+    write_plan_without_retained_backups(root, report)
+}
+
+fn write_plan_with_retained_backups(
+    root: &Path,
+    report: &PlanReport,
+) -> Result<(), AgentSyncError> {
     let mut wrote_anything = false;
     for action in &report.actions {
         if !matches!(
@@ -785,6 +804,137 @@ pub fn write_plan(root: impl AsRef<Path>, report: &PlanReport) -> Result<(), Age
         return Ok(());
     }
     save_state_from_plan(root, report)
+}
+
+fn write_plan_without_retained_backups(
+    root: &Path,
+    report: &PlanReport,
+) -> Result<(), AgentSyncError> {
+    if !has_writable_actions(report) {
+        return Ok(());
+    }
+
+    let state_path = root.join(".agentsync/state.json");
+    let state_snapshot = file_snapshot(&state_path)?;
+    let mut rollback_entries = Vec::new();
+
+    for action in &report.actions {
+        if !matches!(
+            action.action,
+            PlanActionKind::Create | PlanActionKind::Update
+        ) {
+            continue;
+        }
+        let rendered = action.rendered.as_ref().ok_or_else(|| {
+            AgentSyncError::Adapter("write action was missing rendered content".to_string())
+        })?;
+        let abs = root.join(&rendered.path);
+        let previous = match file_snapshot(&abs) {
+            Ok(previous) => previous,
+            Err(error) => {
+                return Err(rollback_and_return(
+                    error,
+                    &rollback_entries,
+                    &state_path,
+                    &state_snapshot,
+                ));
+            }
+        };
+
+        rollback_entries.push(RollbackEntry {
+            path: abs.clone(),
+            previous,
+        });
+
+        if let Err(error) = write_rendered_file(&abs, &rendered.contents) {
+            return Err(rollback_and_return(
+                error,
+                &rollback_entries,
+                &state_path,
+                &state_snapshot,
+            ));
+        }
+    }
+
+    if let Err(error) = save_state_from_plan(root, report) {
+        return Err(rollback_and_return(
+            error,
+            &rollback_entries,
+            &state_path,
+            &state_snapshot,
+        ));
+    }
+
+    Ok(())
+}
+
+fn has_writable_actions(report: &PlanReport) -> bool {
+    report.actions.iter().any(|action| {
+        matches!(
+            action.action,
+            PlanActionKind::Create | PlanActionKind::Update
+        )
+    })
+}
+
+#[derive(Debug)]
+struct RollbackEntry {
+    path: PathBuf,
+    previous: Option<Vec<u8>>,
+}
+
+fn write_rendered_file(path: &Path, contents: &str) -> Result<(), AgentSyncError> {
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent)?;
+    }
+    fs::write(path, contents)?;
+    Ok(())
+}
+
+fn file_snapshot(path: &Path) -> Result<Option<Vec<u8>>, AgentSyncError> {
+    match fs::read(path) {
+        Ok(contents) => Ok(Some(contents)),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(None),
+        Err(error) => Err(AgentSyncError::Io(error)),
+    }
+}
+
+fn rollback_and_return(
+    error: AgentSyncError,
+    rollback_entries: &[RollbackEntry],
+    state_path: &Path,
+    state_snapshot: &Option<Vec<u8>>,
+) -> AgentSyncError {
+    if let Err(rollback_error) = rollback_written_files(rollback_entries)
+        .and_then(|_| restore_file_snapshot(state_path, state_snapshot))
+    {
+        AgentSyncError::Adapter(format!("{error}; rollback failed: {rollback_error}"))
+    } else {
+        error
+    }
+}
+
+fn rollback_written_files(rollback_entries: &[RollbackEntry]) -> Result<(), AgentSyncError> {
+    for entry in rollback_entries.iter().rev() {
+        restore_file_snapshot(&entry.path, &entry.previous)?;
+    }
+    Ok(())
+}
+
+fn restore_file_snapshot(path: &Path, snapshot: &Option<Vec<u8>>) -> Result<(), AgentSyncError> {
+    if let Some(contents) = snapshot {
+        if let Some(parent) = path.parent() {
+            fs::create_dir_all(parent)?;
+        }
+        fs::write(path, contents)?;
+    } else {
+        match fs::remove_file(path) {
+            Ok(()) => {}
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+            Err(error) => return Err(AgentSyncError::Io(error)),
+        }
+    }
+    Ok(())
 }
 
 pub fn resolve_plan_conflict(
@@ -2049,6 +2199,33 @@ mod tests {
     }
 
     #[test]
+    fn default_write_rolls_back_target_when_state_save_fails() {
+        let dir = tempdir().unwrap();
+        fs::write(dir.path().join("AGENTS.md"), "repo rules\n").unwrap();
+        fs::write(dir.path().join("CLAUDE.md"), "existing target\n").unwrap();
+        let report = plan(
+            dir.path(),
+            ResourceSelector::Rules,
+            SourceAlias::AgentsMd,
+            &[Agent::Claude],
+        )
+        .unwrap();
+        fs::create_dir_all(dir.path().join(".agentsync")).unwrap();
+        fs::write(dir.path().join(".agentsync/state.json"), "not json\n").unwrap();
+
+        assert!(write_plan(dir.path(), &report).is_err());
+        assert_eq!(
+            fs::read_to_string(dir.path().join("CLAUDE.md")).unwrap(),
+            "existing target\n"
+        );
+        assert_eq!(
+            fs::read_to_string(dir.path().join(".agentsync/state.json")).unwrap(),
+            "not json\n"
+        );
+        assert!(!dir.path().join("CLAUDE.md.bak").exists());
+    }
+
+    #[test]
     fn drifted_target_is_blocked() {
         let dir = tempdir().unwrap();
         fs::write(dir.path().join("AGENTS.md"), "repo rules\n").unwrap();
@@ -2077,7 +2254,7 @@ mod tests {
     }
 
     #[test]
-    fn interactive_conflict_source_resolution_updates_with_backup() {
+    fn interactive_conflict_source_resolution_updates_without_retained_backup() {
         let dir = tempdir().unwrap();
         fs::write(dir.path().join("AGENTS.md"), "repo rules\n").unwrap();
         let report = plan(
@@ -2107,10 +2284,7 @@ mod tests {
             fs::read_to_string(dir.path().join("CLAUDE.md")).unwrap(),
             "new repo rules\n"
         );
-        assert_eq!(
-            fs::read_to_string(dir.path().join("CLAUDE.md.bak")).unwrap(),
-            "local edit\n"
-        );
+        assert!(!dir.path().join("CLAUDE.md.bak").exists());
     }
 
     #[test]
@@ -2200,7 +2374,7 @@ mod tests {
     }
 
     #[test]
-    fn strategy_source_updates_drifted_target_and_writes_backup() {
+    fn strategy_source_updates_drifted_target_without_retained_backup() {
         let dir = tempdir().unwrap();
         fs::write(dir.path().join("AGENTS.md"), "repo rules\n").unwrap();
         let report = plan(
@@ -2232,6 +2406,44 @@ mod tests {
             fs::read_to_string(dir.path().join("CLAUDE.md")).unwrap(),
             "new repo rules\n"
         );
+        assert!(!dir.path().join("CLAUDE.md.bak").exists());
+    }
+
+    #[test]
+    fn retained_backups_preserve_overwritten_target() {
+        let dir = tempdir().unwrap();
+        fs::write(dir.path().join("AGENTS.md"), "repo rules\n").unwrap();
+        let report = plan(
+            dir.path(),
+            ResourceSelector::Rules,
+            SourceAlias::AgentsMd,
+            &[Agent::Claude],
+        )
+        .unwrap();
+        write_plan(dir.path(), &report).unwrap();
+        fs::write(dir.path().join("CLAUDE.md"), "local edit\n").unwrap();
+        fs::write(dir.path().join("AGENTS.md"), "new repo rules\n").unwrap();
+
+        let report = plan_filtered_with_options(
+            dir.path(),
+            ResourceFilter::all(ResourceSelector::Rules),
+            SourceAlias::AgentsMd,
+            &[Agent::Claude],
+            PlanOptions {
+                strategy: ConflictStrategy::Source,
+                ..PlanOptions::default()
+            },
+        )
+        .unwrap();
+
+        write_plan_with_options(
+            dir.path(),
+            &report,
+            WriteOptions {
+                retain_backups: true,
+            },
+        )
+        .unwrap();
         assert_eq!(
             fs::read_to_string(dir.path().join("CLAUDE.md.bak")).unwrap(),
             "local edit\n"
@@ -2274,9 +2486,10 @@ mod tests {
         );
         write_plan(dir.path(), &report).unwrap();
         assert_eq!(
-            fs::read_to_string(dir.path().join("CLAUDE.md.bak")).unwrap(),
-            "local edit\n"
+            fs::read_to_string(dir.path().join("CLAUDE.md")).unwrap(),
+            "new repo rules\n"
         );
+        assert!(!dir.path().join("CLAUDE.md.bak").exists());
     }
 
     #[test]
@@ -2643,7 +2856,14 @@ mod tests {
         )
         .unwrap();
         assert_eq!(report.actions[0].action, PlanActionKind::Update);
-        write_plan(dir.path(), &report).unwrap();
+        write_plan_with_options(
+            dir.path(),
+            &report,
+            WriteOptions {
+                retain_backups: true,
+            },
+        )
+        .unwrap();
         fs::write(dir.path().join("AGENTS.md"), "second\n").unwrap();
         let report = plan(
             dir.path(),
@@ -2652,7 +2872,14 @@ mod tests {
             &[Agent::Claude],
         )
         .unwrap();
-        write_plan(dir.path(), &report).unwrap();
+        write_plan_with_options(
+            dir.path(),
+            &report,
+            WriteOptions {
+                retain_backups: true,
+            },
+        )
+        .unwrap();
 
         assert_eq!(
             fs::read_to_string(dir.path().join("CLAUDE.md.bak")).unwrap(),
@@ -2681,6 +2908,28 @@ mod tests {
         write_plan(dir.path(), &report).unwrap();
 
         assert!(!dir.path().join(".agentsync/state.json").exists());
+    }
+
+    #[test]
+    fn skipped_write_does_not_require_readable_state() {
+        let dir = tempdir().unwrap();
+        fs::write(dir.path().join("AGENTS.md"), "same\n").unwrap();
+        fs::write(dir.path().join("CLAUDE.md"), "same\n").unwrap();
+        let report = plan(
+            dir.path(),
+            ResourceSelector::Rules,
+            SourceAlias::AgentsMd,
+            &[Agent::Claude],
+        )
+        .unwrap();
+        fs::create_dir_all(dir.path().join(".agentsync")).unwrap();
+        fs::write(dir.path().join(".agentsync/state.json"), "not json\n").unwrap();
+
+        write_plan(dir.path(), &report).unwrap();
+        assert_eq!(
+            fs::read_to_string(dir.path().join(".agentsync/state.json")).unwrap(),
+            "not json\n"
+        );
     }
 
     #[test]
