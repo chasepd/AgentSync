@@ -1,0 +1,30 @@
+# AgentSync Contributor Notes
+
+## Workflow
+
+- Start new work from `main`.
+- Preserve user edits. Do not revert files you did not change unless explicitly asked.
+- Use git worktrees for parallel agent work when changes may overlap.
+- When work is completed, open a PR unless the user explicitly asks not to.
+
+## Issue Privacy
+
+- When opening, creating, or editing issues, do not include personal details.
+- Preserve user privacy while still giving enough detail to communicate the intent of the issue.
+- Scrub and genericize personal data before including it as sample data.
+
+## Validation
+
+Run these before handing off code changes:
+
+```bash
+cargo fmt --check
+cargo clippy --workspace --all-targets -- -D warnings
+cargo test --workspace
+```
+
+## Product Safety
+
+- The CLI must not write generated files unless the command has explicit write intent.
+- Dry-run and diff commands must leave the filesystem untouched.
+- Never silently drop unsupported behavioral fields. Unsupported hooks, commands, executable scripts, plugins, or agent behavior must be reported as blocked.

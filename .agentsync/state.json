@@ -11,19 +11,24 @@
       "source_checksum": "11595ee3ad41770ecdf6688977b9b0bde5e77f6e0572f6b2e02d7f796f3cd8d6",
       "targets": [
         {
-          "agent": "claude",
-          "path": "CLAUDE.md",
+          "agent": "cline",
+          "path": ".clinerules/agentsync.md",
           "native_checksum": "8452e77e5639aea0d8adc14bc8f94988717b368dd780458883a2926f9e5c7a8f"
         },
         {
           "agent": "cursor",
           "path": ".cursor/rules/agentsync.md",
           "native_checksum": "8452e77e5639aea0d8adc14bc8f94988717b368dd780458883a2926f9e5c7a8f"
+        },
+        {
+          "agent": "claude",
+          "path": "CLAUDE.md",
+          "native_checksum": "8452e77e5639aea0d8adc14bc8f94988717b368dd780458883a2926f9e5c7a8f"
         }
       ],
       "diagnostics": [],
       "native_extensions": {},
-      "last_synced_at": "2026-05-27T15:27:31.941440998+00:00"
+      "last_synced_at": "2026-07-02T17:23:44.015422785+00:00"
     },
     {
       "resource_id": "skills:code-review",
@@ -42,6 +47,16 @@
         {
           "agent": "claude",
           "path": ".claude/skills/code-review/code-reviewer.md",
+          "native_checksum": "f298d744922bf5b97d1b2647fa62763a5d5adc09d59e45d122cfbb51d8f46b14"
+        },
+        {
+          "agent": "cline",
+          "path": ".cline/skills/code-review/SKILL.md",
+          "native_checksum": "0a8a31f5a4dc388151ecac7493ee913cde55200efd7dea0ddbd429075da0ef61"
+        },
+        {
+          "agent": "cline",
+          "path": ".cline/skills/code-review/code-reviewer.md",
           "native_checksum": "f298d744922bf5b97d1b2647fa62763a5d5adc09d59e45d122cfbb51d8f46b14"
         },
         {
@@ -72,7 +87,7 @@
       ],
       "diagnostics": [],
       "native_extensions": {},
-      "last_synced_at": "2026-05-27T16:05:22.296084072+00:00"
+      "last_synced_at": "2026-07-02T17:23:44.015422785+00:00"
     }
   ]
 }
