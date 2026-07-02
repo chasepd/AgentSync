@@ -11,6 +11,8 @@
 - Discover Codex custom agents in `.codex/agents/*.toml` and render Codex
   subagents with `developer_instructions` and `model_reasoning_effort`.
 - Add Claude Code `SessionEnd` to Cursor `sessionEnd` hook compatibility.
+- Stop retaining `.bak` files by default after successful sync writes; pass
+  `sync --retain-backups --write` to keep backup files.
 
 ## v0.1.0 MVP
 

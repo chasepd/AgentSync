@@ -1,7 +1,7 @@
 use agentsync_core::report::PlanReport;
 use agentsync_core::{
     Agent, AgentSyncError, ConflictStrategy, PlanConflictChoice, PlanOptions, ResourceFilter,
-    ResourceSelector, Scope, SourceAlias,
+    ResourceSelector, Scope, SourceAlias, WriteOptions,
 };
 use clap::{Parser, Subcommand, ValueEnum};
 use std::io::{self, IsTerminal, Write};
@@ -85,6 +85,9 @@ enum Command {
 
         #[arg(long)]
         write: bool,
+
+        #[arg(long)]
+        retain_backups: bool,
 
         #[arg(long)]
         no_overwrite: bool,
@@ -312,6 +315,7 @@ fn main() -> Result<(), AgentSyncError> {
             to,
             dry_run,
             write,
+            retain_backups,
             no_overwrite,
             interactive,
             strategy,
@@ -327,6 +331,11 @@ fn main() -> Result<(), AgentSyncError> {
             if interactive && !io::stdin().is_terminal() {
                 return Err(AgentSyncError::InvalidArgument(
                     "sync --interactive requires a TTY".to_string(),
+                ));
+            }
+            if retain_backups && !write {
+                return Err(AgentSyncError::InvalidArgument(
+                    "sync --retain-backups requires --write".to_string(),
                 ));
             }
             let mut selection = resolve_sync_selection(all, resource, name)?;
@@ -362,7 +371,11 @@ fn main() -> Result<(), AgentSyncError> {
                 print!("{}", report.to_text());
             }
             if write {
-                agentsync_core::write_plan(root, &report)?;
+                agentsync_core::write_plan_with_options(
+                    root,
+                    &report,
+                    WriteOptions { retain_backups },
+                )?;
             } else if !dry_run && output != CliFormat::Json {
                 println!("No files written. Re-run with --write to apply changes.");
             }

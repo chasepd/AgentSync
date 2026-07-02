@@ -7,7 +7,8 @@ AgentSync is dry-run first. Commands that can change files must require
 
 - Do not write unless `--write` is passed.
 - Show diffs before overwriting.
-- Back up changed files.
+- Use transient recovery for overwritten files by default.
+- Retain `.bak` backups only when `sync --retain-backups --write` is passed.
 - Refuse drifted-file overwrites unless the strategy allows them.
 - Warn on partial conversions.
 - Block unsafe lossy conversions by default.

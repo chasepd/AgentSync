@@ -537,7 +537,7 @@ fn sync_no_overwrite_write_does_not_replace_existing_untracked_target() {
 }
 
 #[test]
-fn sync_strategy_source_updates_drifted_target_with_backup() {
+fn sync_strategy_source_updates_drifted_target_without_retained_backup() {
     let dir = tempdir().unwrap();
     fs::write(dir.path().join("AGENTS.md"), "repo rules\n").unwrap();
     Command::cargo_bin("agentsync")
@@ -578,10 +578,79 @@ fn sync_strategy_source_updates_drifted_target_with_backup() {
         fs::read_to_string(dir.path().join("CLAUDE.md")).unwrap(),
         "new repo rules\n"
     );
+    assert!(!dir.path().join("CLAUDE.md.bak").exists());
+}
+
+#[test]
+fn sync_retain_backups_keeps_overwritten_target_backup() {
+    let dir = tempdir().unwrap();
+    fs::write(dir.path().join("AGENTS.md"), "repo rules\n").unwrap();
+    Command::cargo_bin("agentsync")
+        .unwrap()
+        .current_dir(dir.path())
+        .args([
+            "sync",
+            "rules",
+            "--from",
+            "agents-md",
+            "--to",
+            "claude",
+            "--write",
+        ])
+        .assert()
+        .success();
+    fs::write(dir.path().join("CLAUDE.md"), "local edit\n").unwrap();
+    fs::write(dir.path().join("AGENTS.md"), "new repo rules\n").unwrap();
+
+    Command::cargo_bin("agentsync")
+        .unwrap()
+        .current_dir(dir.path())
+        .args([
+            "sync",
+            "rules",
+            "--from",
+            "agents-md",
+            "--to",
+            "claude",
+            "--strategy",
+            "source",
+            "--retain-backups",
+            "--write",
+        ])
+        .assert()
+        .success();
+
     assert_eq!(
         fs::read_to_string(dir.path().join("CLAUDE.md.bak")).unwrap(),
         "local edit\n"
     );
+}
+
+#[test]
+fn sync_retain_backups_requires_write() {
+    let dir = tempdir().unwrap();
+    fs::write(dir.path().join("AGENTS.md"), "repo rules\n").unwrap();
+
+    let output = Command::cargo_bin("agentsync")
+        .unwrap()
+        .current_dir(dir.path())
+        .args([
+            "sync",
+            "rules",
+            "--from",
+            "agents-md",
+            "--to",
+            "claude",
+            "--retain-backups",
+        ])
+        .assert()
+        .failure()
+        .get_output()
+        .stderr
+        .clone();
+    let stderr = String::from_utf8(output).unwrap();
+    assert!(stderr.contains("sync --retain-backups requires --write"));
+    assert!(!dir.path().join("CLAUDE.md").exists());
 }
 
 #[test]
