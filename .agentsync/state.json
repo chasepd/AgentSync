@@ -21,6 +21,11 @@
           "native_checksum": "8452e77e5639aea0d8adc14bc8f94988717b368dd780458883a2926f9e5c7a8f"
         },
         {
+          "agent": "cursor",
+          "path": ".cursor/rules/agentsync.mdc",
+          "native_checksum": "dec782dc0789f31b9cecb295fd634a4fac5c32139e16f914d69b84145531fb0a"
+        },
+        {
           "agent": "claude",
           "path": "CLAUDE.md",
           "native_checksum": "8452e77e5639aea0d8adc14bc8f94988717b368dd780458883a2926f9e5c7a8f"
@@ -28,7 +33,7 @@
       ],
       "diagnostics": [],
       "native_extensions": {},
-      "last_synced_at": "2026-07-02T17:23:44.015422785+00:00"
+      "last_synced_at": "2026-07-02T17:52:25.294149425+00:00"
     },
     {
       "resource_id": "skills:code-review",
