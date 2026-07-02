@@ -7,8 +7,8 @@ and placeholder CLI commands. No write behavior.
 
 ## M1: Read-Only Scanner
 
-Implement `agentsync scan --scope project` for Claude Code, Codex CLI, Cursor CLI,
-and OpenCode. Add table and JSON output plus layout fixtures.
+Implement `agentsync scan --scope project` for Claude Code, Codex CLI, Cline CLI,
+Cursor CLI, and OpenCode. Add table and JSON output plus layout fixtures.
 
 ## M2: Normalization And Capability Reporting
 
@@ -39,4 +39,3 @@ strict diagnostics. Never auto-run generated code.
 
 Add `sync --interactive`, conflict strategies, and adapter/plugin extension
 points for future tools.
-

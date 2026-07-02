@@ -61,6 +61,11 @@ pub const HOOK_EVENT_EQUIVALENCE: &[HookEquivalence] = &[
             direct(Agent::Codex, "PreToolUse"),
             direct(Agent::Claude, "PreToolUse"),
             shim(
+                Agent::Cline,
+                "beforeTool",
+                "requires a generated runtime plugin wrapper and payload adapter",
+            ),
+            shim(
                 Agent::OpenCode,
                 "tool.execute.before",
                 "requires a generated plugin wrapper and payload adapter",
@@ -75,6 +80,11 @@ pub const HOOK_EVENT_EQUIVALENCE: &[HookEquivalence] = &[
             direct(Agent::Codex, "PostToolUse"),
             direct(Agent::Claude, "PostToolUse"),
             shim(
+                Agent::Cline,
+                "afterTool",
+                "requires a generated runtime plugin wrapper and payload adapter",
+            ),
+            shim(
                 Agent::OpenCode,
                 "tool.execute.after",
                 "requires a generated plugin wrapper and payload adapter",
@@ -88,6 +98,11 @@ pub const HOOK_EVENT_EQUIVALENCE: &[HookEquivalence] = &[
         mappings: &[
             direct(Agent::Codex, "PermissionRequest"),
             direct(Agent::Claude, "PermissionRequest"),
+            report_only(
+                Agent::Cline,
+                None,
+                "Cline runtime hooks can block tools but do not document a direct PermissionRequest lifecycle hook",
+            ),
             shim(
                 Agent::OpenCode,
                 "permission.ask",
@@ -107,6 +122,11 @@ pub const HOOK_EVENT_EQUIVALENCE: &[HookEquivalence] = &[
             direct(Agent::Codex, "SessionStart"),
             direct(Agent::Claude, "SessionStart"),
             shim(
+                Agent::Cline,
+                "beforeRun",
+                "startup source and payload shape differ",
+            ),
+            shim(
                 Agent::OpenCode,
                 "session.created",
                 "startup source and payload shape differ",
@@ -120,6 +140,11 @@ pub const HOOK_EVENT_EQUIVALENCE: &[HookEquivalence] = &[
         mappings: &[
             direct(Agent::Codex, "UserPromptSubmit"),
             direct(Agent::Claude, "UserPromptSubmit"),
+            shim(
+                Agent::Cline,
+                "beforeRun",
+                "Cline prompt-submit file hooks are backed by beforeRun with submitted prompt context",
+            ),
             report_only(
                 Agent::OpenCode,
                 Some("tui.prompt.append"),
@@ -134,6 +159,11 @@ pub const HOOK_EVENT_EQUIVALENCE: &[HookEquivalence] = &[
         mappings: &[
             direct(Agent::Codex, "PreCompact"),
             direct(Agent::Claude, "PreCompact"),
+            report_only(
+                Agent::Cline,
+                None,
+                "no documented equivalent runtime hook for conversation compaction",
+            ),
             shim(
                 Agent::OpenCode,
                 "experimental.session.compacting",
@@ -148,6 +178,11 @@ pub const HOOK_EVENT_EQUIVALENCE: &[HookEquivalence] = &[
         mappings: &[
             direct(Agent::Codex, "PostCompact"),
             direct(Agent::Claude, "PostCompact"),
+            report_only(
+                Agent::Cline,
+                None,
+                "no documented equivalent runtime hook for completed compaction",
+            ),
             shim(
                 Agent::OpenCode,
                 "session.compacted",
@@ -167,6 +202,11 @@ pub const HOOK_EVENT_EQUIVALENCE: &[HookEquivalence] = &[
             direct(Agent::Codex, "SubagentStart"),
             direct(Agent::Claude, "SubagentStart"),
             report_only(
+                Agent::Cline,
+                None,
+                "no documented equivalent lifecycle hook for nested subagent start",
+            ),
+            report_only(
                 Agent::OpenCode,
                 None,
                 "no documented equivalent plugin event",
@@ -181,6 +221,11 @@ pub const HOOK_EVENT_EQUIVALENCE: &[HookEquivalence] = &[
             direct(Agent::Codex, "SubagentStop"),
             direct(Agent::Claude, "SubagentStop"),
             report_only(
+                Agent::Cline,
+                None,
+                "no documented equivalent lifecycle hook for nested subagent stop",
+            ),
+            report_only(
                 Agent::OpenCode,
                 None,
                 "no documented equivalent plugin event",
@@ -194,6 +239,11 @@ pub const HOOK_EVENT_EQUIVALENCE: &[HookEquivalence] = &[
         mappings: &[
             direct(Agent::Codex, "Stop"),
             direct(Agent::Claude, "Stop"),
+            shim(
+                Agent::Cline,
+                "afterRun",
+                "Cline task-complete file hooks are backed by afterRun",
+            ),
             report_only(
                 Agent::OpenCode,
                 Some("session.idle"),
@@ -212,6 +262,11 @@ pub const HOOK_TOOL_EQUIVALENCE: &[HookEquivalence] = &[
             direct(Agent::Codex, "Bash|exec_command"),
             direct(Agent::Claude, "Bash"),
             shim(
+                Agent::Cline,
+                "run_commands",
+                "Cline runtime plugin wrapper must adapt command input into JSON hook stdin",
+            ),
+            shim(
                 Agent::OpenCode,
                 "bash",
                 "OpenCode plugin wrapper must adapt args.command into JSON hook stdin",
@@ -225,6 +280,11 @@ pub const HOOK_TOOL_EQUIVALENCE: &[HookEquivalence] = &[
         mappings: &[
             direct(Agent::Codex, "Read"),
             direct(Agent::Claude, "Read"),
+            shim(
+                Agent::Cline,
+                "read_files",
+                "Cline runtime plugin wrapper must adapt file input into JSON hook stdin",
+            ),
             shim(
                 Agent::OpenCode,
                 "read",
@@ -240,6 +300,11 @@ pub const HOOK_TOOL_EQUIVALENCE: &[HookEquivalence] = &[
             direct(Agent::Codex, "Grep"),
             direct(Agent::Claude, "Grep"),
             shim(
+                Agent::Cline,
+                "search_files",
+                "Cline runtime plugin wrapper must adapt search arguments into JSON hook stdin",
+            ),
+            shim(
                 Agent::OpenCode,
                 "grep",
                 "OpenCode plugin wrapper must adapt grep arguments into JSON hook stdin",
@@ -253,6 +318,11 @@ pub const HOOK_TOOL_EQUIVALENCE: &[HookEquivalence] = &[
         mappings: &[
             direct(Agent::Codex, "Glob"),
             direct(Agent::Claude, "Glob"),
+            shim(
+                Agent::Cline,
+                "list_files",
+                "Cline runtime plugin wrapper must adapt list/glob arguments into JSON hook stdin",
+            ),
             shim(
                 Agent::OpenCode,
                 "glob",
@@ -272,6 +342,11 @@ pub const HOOK_TOOL_EQUIVALENCE: &[HookEquivalence] = &[
             direct(Agent::Codex, "apply_patch|Write|Edit"),
             direct(Agent::Claude, "Write|Edit|MultiEdit"),
             shim(
+                Agent::Cline,
+                "editor|write_file|apply_patch",
+                "Cline uses tool names for editor, write_file, and apply_patch in runtime hooks",
+            ),
+            shim(
                 Agent::OpenCode,
                 "edit|write|apply_patch",
                 "OpenCode uses lowercase tools and different edit/patch argument shapes",
@@ -285,6 +360,11 @@ pub const HOOK_TOOL_EQUIVALENCE: &[HookEquivalence] = &[
         mappings: &[
             direct(Agent::Codex, "WebFetch"),
             direct(Agent::Claude, "WebFetch"),
+            report_only(
+                Agent::Cline,
+                None,
+                "no stable documented Cline tool matcher for WebFetch",
+            ),
             shim(
                 Agent::OpenCode,
                 "webfetch",
@@ -303,6 +383,11 @@ pub const HOOK_TOOL_EQUIVALENCE: &[HookEquivalence] = &[
         mappings: &[
             direct(Agent::Codex, "WebSearch"),
             direct(Agent::Claude, "WebSearch"),
+            report_only(
+                Agent::Cline,
+                None,
+                "no stable documented Cline tool matcher for WebSearch",
+            ),
             shim(
                 Agent::OpenCode,
                 "websearch",
@@ -321,6 +406,11 @@ pub const HOOK_TOOL_EQUIVALENCE: &[HookEquivalence] = &[
         mappings: &[
             direct(Agent::Codex, "spawn_agent|Agent"),
             direct(Agent::Claude, "Agent"),
+            report_only(
+                Agent::Cline,
+                None,
+                "no stable documented equivalent tool matcher for spawned agents",
+            ),
             report_only(Agent::OpenCode, None, "no stable documented equivalent tool matcher"),
             direct(Agent::CursorCli, "Task"),
         ],
@@ -331,6 +421,11 @@ pub const HOOK_TOOL_EQUIVALENCE: &[HookEquivalence] = &[
         mappings: &[
             direct(Agent::Codex, "mcp__<server>__<tool>"),
             direct(Agent::Claude, "mcp__<server>__<tool>"),
+            report_only(
+                Agent::Cline,
+                None,
+                "Cline MCP tools are behavior-bearing and not normalized safely yet",
+            ),
             shim(
                 Agent::OpenCode,
                 "<server>_<tool>",

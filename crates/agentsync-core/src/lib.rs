@@ -551,6 +551,24 @@ pub fn plan_filters_with_options_and_adapters(
     let mut diagnostics = Vec::new();
     for source in sources {
         for target in targets {
+            if source.kind == ResourceKind::Hook
+                && source.source_agent == Agent::Cline
+                && *target == Agent::Cline
+            {
+                actions.push(PlanAction {
+                    action: PlanActionKind::Skip,
+                    path: source
+                        .native_paths
+                        .first()
+                        .cloned()
+                        .unwrap_or_else(|| PathBuf::from("cline:hooks")),
+                    resource_id: source.id.clone(),
+                    reason: "native Cline hook source already belongs to target".to_string(),
+                    rendered: None,
+                    diff: None,
+                });
+                continue;
+            }
             if !matches!(
                 source.kind,
                 ResourceKind::RuleSet
@@ -586,11 +604,15 @@ pub fn plan_filters_with_options_and_adapters(
                 && (source.support == SupportLevel::Blocked
                     || !matches!(
                         source.source_agent,
-                        Agent::Codex | Agent::Claude | Agent::CursorCli
+                        Agent::Codex | Agent::Claude | Agent::Cline | Agent::CursorCli
                     )
                     || !matches!(
                         *target,
-                        Agent::Codex | Agent::Claude | Agent::CursorCli | Agent::OpenCode
+                        Agent::Codex
+                            | Agent::Claude
+                            | Agent::Cline
+                            | Agent::CursorCli
+                            | Agent::OpenCode
                     ))
             {
                 diagnostics.extend(source.diagnostics.clone());
@@ -899,6 +921,7 @@ fn source_matches_alias(resource: &NormalizedResource, from: SourceAlias) -> boo
             .any(|path| path == Path::new("AGENTS.md")),
         SourceAlias::Codex => resource.source_agent == Agent::Codex,
         SourceAlias::Claude => resource.source_agent == Agent::Claude,
+        SourceAlias::Cline => resource.source_agent == Agent::Cline,
         SourceAlias::CursorCli => resource.source_agent == Agent::CursorCli,
         SourceAlias::OpenCode => resource.source_agent == Agent::OpenCode,
     }
@@ -1556,6 +1579,8 @@ fn infer_agent_from_path(path: &Path) -> Agent {
     let text = path.to_string_lossy();
     if text.starts_with(".claude/") || text == "CLAUDE.md" {
         Agent::Claude
+    } else if text.starts_with(".cline/") || text.starts_with(".clinerules/") {
+        Agent::Cline
     } else if text.starts_with(".cursor/") {
         Agent::CursorCli
     } else if text.starts_with(".opencode/") {
@@ -1905,7 +1930,7 @@ mod tests {
                 .count(),
             2
         );
-        assert_eq!(report.capabilities.len(), 4);
+        assert_eq!(report.capabilities.len(), 5);
     }
 
     #[test]
@@ -1985,11 +2010,15 @@ mod tests {
         let dir = tempdir().unwrap();
         let report = scan_root(dir.path(), Scope::Project).unwrap();
 
-        assert_eq!(report.capabilities.len(), 4);
+        assert_eq!(report.capabilities.len(), 5);
         assert!(report
             .capabilities
             .iter()
             .any(|capabilities| capabilities.agent == Agent::OpenCode));
+        assert!(report
+            .capabilities
+            .iter()
+            .any(|capabilities| capabilities.agent == Agent::Cline));
     }
 
     #[test]
@@ -3369,5 +3398,108 @@ mod tests {
 
         assert_eq!(report.actions[0].action, PlanActionKind::Block);
         assert!(report.actions[0].rendered.is_none());
+    }
+
+    #[test]
+    fn portable_subagent_plan_renders_cline_markdown_with_model_id() {
+        let dir = tempdir().unwrap();
+        fs::create_dir_all(dir.path().join(".claude/agents")).unwrap();
+        fs::write(
+            dir.path().join(".claude/agents/reviewer.md"),
+            "---\nname: reviewer\ndescription: Review code\nmodel: anthropic/claude-sonnet-4-6\n---\nReview carefully.\n",
+        )
+        .unwrap();
+
+        let report = plan(
+            dir.path(),
+            ResourceSelector::Subagents,
+            SourceAlias::Claude,
+            &[Agent::Cline],
+        )
+        .unwrap();
+
+        assert_eq!(report.actions[0].action, PlanActionKind::Create);
+        let rendered = report.actions[0].rendered.as_ref().unwrap();
+        assert_eq!(rendered.path, Path::new(".cline/agents/reviewer.md"));
+        assert!(rendered
+            .contents
+            .contains("modelId: anthropic/claude-sonnet-4-6\n"));
+        assert!(rendered.contents.ends_with("Review carefully.\n"));
+    }
+
+    #[test]
+    fn hook_plan_renders_codex_hooks_to_cline_plugin() {
+        let dir = tempdir().unwrap();
+        fs::create_dir_all(dir.path().join(".codex")).unwrap();
+        fs::write(
+            dir.path().join(".codex/hooks.json"),
+            r#"{"hooks":{"PreToolUse":[{"matcher":"exec_command","hooks":[{"type":"command","command":"echo shell","timeout":5}]}],"Stop":[{"hooks":[{"type":"command","command":"echo stop"}]}]}}"#,
+        )
+        .unwrap();
+
+        let report = plan(
+            dir.path(),
+            ResourceSelector::Hooks,
+            SourceAlias::Codex,
+            &[Agent::Cline],
+        )
+        .unwrap();
+
+        assert_eq!(report.actions[0].action, PlanActionKind::Create);
+        let rendered = report.actions[0].rendered.as_ref().unwrap();
+        assert_eq!(
+            rendered.path,
+            Path::new(".cline/plugins/agentsync-hooks.js")
+        );
+        assert!(rendered.contents.contains("\"event\": \"beforeTool\""));
+        assert!(rendered.contents.contains("\"event\": \"afterRun\""));
+        assert!(rendered
+            .contents
+            .contains("\"tools\": [\n      \"run_commands\""));
+        assert!(rendered.contents.contains("\"timeoutSeconds\": 5"));
+        assert!(report
+            .diagnostics
+            .iter()
+            .any(|diagnostic| diagnostic.message.contains("Cline shim reuses commands")));
+    }
+
+    #[test]
+    fn hook_plan_renders_cline_file_hook_source_to_codex_with_shim() {
+        let dir = tempdir().unwrap();
+        fs::create_dir_all(dir.path().join(".cline/hooks")).unwrap();
+        fs::write(
+            dir.path().join(".cline/hooks/PreToolUse.sh"),
+            "#!/usr/bin/env bash\ncat >/dev/null\n",
+        )
+        .unwrap();
+
+        let report = plan(
+            dir.path(),
+            ResourceSelector::Hooks,
+            SourceAlias::Cline,
+            &[Agent::Codex],
+        )
+        .unwrap();
+
+        assert!(report.actions.iter().any(|action| {
+            action.action == PlanActionKind::Create
+                && action.path == Path::new(".codex/hooks.json")
+                && action
+                    .rendered
+                    .as_ref()
+                    .unwrap()
+                    .contents
+                    .contains("bash .codex/hooks/agentsync-cline-PreToolUse.sh")
+        }));
+        assert!(report.actions.iter().any(|action| {
+            action.action == PlanActionKind::Create
+                && action.path == Path::new(".codex/hooks/agentsync-cline-PreToolUse.sh")
+                && action
+                    .rendered
+                    .as_ref()
+                    .unwrap()
+                    .contents
+                    .contains("SOURCE='.cline/hooks/PreToolUse.sh'")
+        }));
     }
 }

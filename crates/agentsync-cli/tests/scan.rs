@@ -530,3 +530,85 @@ fn scan_json_includes_cursor_hook_config_as_structured_partial_behavior() {
         .any(|diagnostic| diagnostic["message"]
             == "hook.preToolUse: executable hook behavior requires compatibility mapping"));
 }
+
+#[test]
+fn scan_json_includes_cline_resources_and_file_hooks() {
+    let dir = tempdir().unwrap();
+    fs::create_dir_all(dir.path().join(".cline/rules")).unwrap();
+    fs::write(
+        dir.path().join(".cline/rules/testing.md"),
+        "testing rules\n",
+    )
+    .unwrap();
+    fs::create_dir_all(dir.path().join(".cline/skills/review")).unwrap();
+    fs::write(
+        dir.path().join(".cline/skills/review/SKILL.md"),
+        "---\nname: review\n---\nReview skill\n",
+    )
+    .unwrap();
+    fs::create_dir_all(dir.path().join(".cline/agents")).unwrap();
+    fs::write(
+        dir.path().join(".cline/agents/reviewer.md"),
+        "---\nname: reviewer\nmodelId: anthropic/claude-sonnet-4-6\n---\nReview.\n",
+    )
+    .unwrap();
+    fs::create_dir_all(dir.path().join(".cline/hooks")).unwrap();
+    fs::write(
+        dir.path().join(".cline/hooks/PreToolUse.sh"),
+        "#!/usr/bin/env bash\n",
+    )
+    .unwrap();
+    fs::create_dir_all(dir.path().join(".cline/plugins")).unwrap();
+    fs::write(
+        dir.path().join(".cline/plugins/audit.ts"),
+        "export default {}\n",
+    )
+    .unwrap();
+    fs::write(
+        dir.path().join(".cline/mcp.json"),
+        r#"{"mcpServers":{"local":{"command":"node"}}}"#,
+    )
+    .unwrap();
+
+    let output = Command::cargo_bin("agentsync")
+        .unwrap()
+        .current_dir(dir.path())
+        .args(["scan", "--format", "json"])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let json: Value = serde_json::from_slice(&output).unwrap();
+    let normalized = json["normalized"].as_array().unwrap();
+
+    assert!(normalized.iter().any(|resource| {
+        resource["source_agent"] == "cline"
+            && resource["kind"] == "rule_set"
+            && resource["native_paths"][0] == ".cline/rules/testing.md"
+    }));
+    assert!(normalized
+        .iter()
+        .any(|resource| resource["id"] == "skills:review" && resource["source_agent"] == "cline"));
+    assert!(normalized.iter().any(|resource| {
+        resource["id"] == "subagents:reviewer"
+            && resource["subagent"]["model"] == "anthropic/claude-sonnet-4-6"
+    }));
+    let hook = normalized
+        .iter()
+        .find(|resource| resource["id"] == "hooks:cline:.cline/hooks/PreToolUse.sh")
+        .unwrap();
+    assert_eq!(hook["support"], "partial");
+    assert_eq!(
+        hook["native_extensions"]["behavior.fields"]["hooks"]["PreToolUse"][0]["hooks"][0]
+            ["command"],
+        ".cline/hooks/PreToolUse.sh"
+    );
+    assert!(normalized.iter().any(|resource| {
+        resource["id"] == "plugins:cline:.cline/plugins/audit.ts"
+            && resource["support"] == "blocked"
+    }));
+    assert!(normalized
+        .iter()
+        .any(|resource| resource["id"] == "plugins:cline:.cline/mcp.json"));
+}

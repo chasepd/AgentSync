@@ -444,6 +444,33 @@ fn sync_write_creates_target_and_state() {
 }
 
 #[test]
+fn sync_write_creates_cline_rule_target_and_state() {
+    let dir = tempdir().unwrap();
+    fs::write(dir.path().join("AGENTS.md"), "repo rules\n").unwrap();
+
+    Command::cargo_bin("agentsync")
+        .unwrap()
+        .current_dir(dir.path())
+        .args([
+            "sync",
+            "rules",
+            "--from",
+            "agents-md",
+            "--to",
+            "cline",
+            "--write",
+        ])
+        .assert()
+        .success();
+
+    assert_eq!(
+        fs::read_to_string(dir.path().join(".clinerules/agentsync.md")).unwrap(),
+        "repo rules\n"
+    );
+    assert!(dir.path().join(".agentsync/state.json").exists());
+}
+
+#[test]
 fn diff_no_overwrite_blocks_existing_untracked_target() {
     let dir = tempdir().unwrap();
     fs::write(dir.path().join("AGENTS.md"), "repo rules\n").unwrap();
@@ -797,6 +824,49 @@ fn cursor_cli_alias_is_accepted_for_targets() {
         .args(["diff", "rules", "--from", "agents-md", "--to", "cursor-cli"])
         .assert()
         .success();
+}
+
+#[test]
+fn cline_is_accepted_for_sources_and_targets() {
+    let dir = tempdir().unwrap();
+    fs::create_dir_all(dir.path().join(".cline/rules")).unwrap();
+    fs::write(dir.path().join(".cline/rules/testing.md"), "cline rules\n").unwrap();
+
+    let output = Command::cargo_bin("agentsync")
+        .unwrap()
+        .current_dir(dir.path())
+        .args([
+            "diff", "rules", "--from", "cline", "--to", "codex", "--format", "json",
+        ])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let json: Value = serde_json::from_slice(&output).unwrap();
+    assert_eq!(json["actions"][0]["path"], "AGENTS.md");
+
+    fs::write(dir.path().join("AGENTS.md"), "repo rules\n").unwrap();
+    let output = Command::cargo_bin("agentsync")
+        .unwrap()
+        .current_dir(dir.path())
+        .args([
+            "diff",
+            "rules",
+            "--from",
+            "agents-md",
+            "--to",
+            "cline",
+            "--format",
+            "json",
+        ])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let json: Value = serde_json::from_slice(&output).unwrap();
+    assert_eq!(json["actions"][0]["path"], ".clinerules/agentsync.md");
 }
 
 #[test]
@@ -1647,6 +1717,118 @@ fn diff_codex_hook_to_opencode_returns_rendered_plugin_plan() {
 }
 
 #[test]
+fn diff_codex_hook_to_cline_returns_rendered_plugin_plan() {
+    let dir = tempdir().unwrap();
+    fs::create_dir_all(dir.path().join(".codex")).unwrap();
+    fs::write(
+        dir.path().join(".codex/hooks.json"),
+        r#"{"hooks":{"PreToolUse":[{"matcher":"exec_command","hooks":[{"type":"command","command":"echo shell"}]}]}}"#,
+    )
+    .unwrap();
+
+    let output = Command::cargo_bin("agentsync")
+        .unwrap()
+        .current_dir(dir.path())
+        .args([
+            "diff", "hook", "--from", "codex", "--to", "cline", "--format", "json",
+        ])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let json: Value = serde_json::from_slice(&output).unwrap();
+
+    assert_eq!(json["actions"][0]["action"], "create");
+    assert_eq!(
+        json["actions"][0]["path"],
+        ".cline/plugins/agentsync-hooks.js"
+    );
+    let contents = json["actions"][0]["rendered"]["contents"].as_str().unwrap();
+    assert!(contents.contains("\"event\": \"beforeTool\""));
+    assert!(contents.contains("\"tools\": [\n      \"run_commands\""));
+    assert!(contents.contains("\"command\": \"echo shell\""));
+    assert!(json["diagnostics"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|diagnostic| diagnostic["message"]
+            .as_str()
+            .unwrap()
+            .contains("Cline shim reuses commands")));
+}
+
+#[test]
+fn diff_cline_file_hook_to_codex_returns_hook_config_and_shim() {
+    let dir = tempdir().unwrap();
+    fs::create_dir_all(dir.path().join(".cline/hooks")).unwrap();
+    fs::write(
+        dir.path().join(".cline/hooks/PreToolUse.sh"),
+        "#!/usr/bin/env bash\n",
+    )
+    .unwrap();
+
+    let output = Command::cargo_bin("agentsync")
+        .unwrap()
+        .current_dir(dir.path())
+        .args([
+            "diff", "hook", "--from", "cline", "--to", "codex", "--format", "json",
+        ])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let json: Value = serde_json::from_slice(&output).unwrap();
+    let actions = json["actions"].as_array().unwrap();
+
+    assert!(actions.iter().any(|action| {
+        action["path"] == ".codex/hooks.json"
+            && action["rendered"]["contents"]
+                .as_str()
+                .unwrap()
+                .contains("bash .codex/hooks/agentsync-cline-PreToolUse.sh")
+    }));
+    assert!(actions.iter().any(|action| {
+        action["path"] == ".codex/hooks/agentsync-cline-PreToolUse.sh"
+            && action["rendered"]["contents"]
+                .as_str()
+                .unwrap()
+                .contains("SOURCE='.cline/hooks/PreToolUse.sh'")
+    }));
+}
+
+#[test]
+fn diff_cline_file_hook_to_cline_skips_native_source() {
+    let dir = tempdir().unwrap();
+    fs::create_dir_all(dir.path().join(".cline/hooks")).unwrap();
+    fs::write(
+        dir.path().join(".cline/hooks/PreToolUse.sh"),
+        "#!/usr/bin/env bash\n",
+    )
+    .unwrap();
+
+    let output = Command::cargo_bin("agentsync")
+        .unwrap()
+        .current_dir(dir.path())
+        .args([
+            "diff", "hook", "--from", "cline", "--to", "cline", "--format", "json",
+        ])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let json: Value = serde_json::from_slice(&output).unwrap();
+    let actions = json["actions"].as_array().unwrap();
+
+    assert_eq!(actions.len(), 1);
+    assert_eq!(actions[0]["action"], "skip");
+    assert_eq!(actions[0]["path"], ".cline/hooks/PreToolUse.sh");
+    assert!(actions[0]["rendered"].is_null());
+}
+
+#[test]
 fn sync_hook_write_creates_target_and_state() {
     let dir = tempdir().unwrap();
     fs::create_dir_all(dir.path().join(".claude")).unwrap();
@@ -1693,6 +1875,32 @@ fn sync_opencode_hook_write_creates_plugin_and_state() {
         fs::read_to_string(dir.path().join(".opencode/plugins/agentsync-hooks.js")).unwrap();
     assert!(rendered.contains("\"tool.execute.before\""));
     assert!(rendered.contains("\"bash\""));
+    assert!(dir.path().join(".agentsync/state.json").exists());
+}
+
+#[test]
+fn sync_cline_hook_write_creates_plugin_and_state() {
+    let dir = tempdir().unwrap();
+    fs::create_dir_all(dir.path().join(".claude")).unwrap();
+    fs::write(
+        dir.path().join(".claude/settings.json"),
+        r#"{"hooks":{"PreToolUse":[{"matcher":"Bash","hooks":[{"type":"command","command":"echo hi"}]}]}}"#,
+    )
+    .unwrap();
+
+    Command::cargo_bin("agentsync")
+        .unwrap()
+        .current_dir(dir.path())
+        .args([
+            "sync", "hooks", "--from", "claude", "--to", "cline", "--write",
+        ])
+        .assert()
+        .success();
+
+    let rendered =
+        fs::read_to_string(dir.path().join(".cline/plugins/agentsync-hooks.js")).unwrap();
+    assert!(rendered.contains("\"beforeTool\""));
+    assert!(rendered.contains("\"run_commands\""));
     assert!(dir.path().join(".agentsync/state.json").exists());
 }
 
