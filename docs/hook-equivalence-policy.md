@@ -31,6 +31,7 @@ plan/report and must not be silently omitted.
 | `tool.after` | `PostToolUse` direct | `PostToolUse` direct | `afterTool` shim-required | `tool.execute.after` shim-required | `postToolUse` direct |
 | `permission.request` | `PermissionRequest` direct | `PermissionRequest` direct | report-only | `permission.ask` shim-required | report-only |
 | `session.start` | `SessionStart` direct | `SessionStart` direct | `beforeRun` shim-required | `session.created` shim-required | `sessionStart` direct |
+| `session.end` | report-only | `SessionEnd` direct | report-only | report-only | `sessionEnd` direct |
 | `prompt.submit` | `UserPromptSubmit` direct | `UserPromptSubmit` direct | `beforeRun` shim-required | report-only | `beforeSubmitPrompt` direct |
 | `compact.before` | `PreCompact` direct | `PreCompact` direct | report-only | `experimental.session.compacting` shim-required | `preCompact` direct |
 | `compact.after` | `PostCompact` direct | `PostCompact` direct | report-only | `session.compacted` shim-required | report-only |
@@ -129,18 +130,18 @@ they are the generated AgentSync hook shim.
 - Claude Code documents JSON hook configuration, tool-event matchers, command
   hooks, stdin payloads, and blocking output semantics:
   https://code.claude.com/docs/en/hooks
-- Codex CLI hook events and matcher aliases are currently specified in the
-  open-source Codex repository. As of May 27, 2026, Codex exposes
+- Codex CLI hook events and matcher aliases are documented in the current
+  Codex manual. As of July 2, 2026, Codex exposes
   `PreToolUse`, `PermissionRequest`, `PostToolUse`, `PreCompact`,
   `PostCompact`, `SessionStart`, `UserPromptSubmit`, `SubagentStart`,
   `SubagentStop`, and `Stop`, and treats `apply_patch` as the canonical edit
   hook name with `Write` and `Edit` matcher aliases:
-  https://github.com/openai/codex
+  https://developers.openai.com/codex/hooks
 - AgentSync also treats `exec_command` as a Codex-compatible shell matcher
   because Codex API sessions can expose the shell tool under that name.
 - OpenCode documents local `.opencode/plugins` auto-loading plus plugin hooks
   and event names, including `tool.execute.before`, `tool.execute.after`,
-  `permission.asked`, `session.created`, and
+  `permission.ask`, `session.created`, and
   `experimental.session.compacting`:
   https://opencode.ai/docs/plugins/
 - The OpenCode plugin package type exposes the decision-capable
@@ -150,8 +151,8 @@ they are the generated AgentSync hook shim.
   `read`, `grep`, `glob`, `apply_patch`, `webfetch`, and `websearch`:
   https://opencode.ai/docs/tools/
 - Cursor documents `.cursor/hooks.json`, command-based hooks, supported events,
-  and matchers including `Shell`, `Read`, `Write`, `Grep`, `Task`, and
-  `MCP:<tool_name>`:
+  cloud-agent hook support, prompt hooks, and lifecycle events including
+  `sessionEnd`, `beforeShellExecution`, `afterFileEdit`, and MCP hooks:
   https://cursor.com/docs/hooks
 - Cursor documents Claude Code hook compatibility and the Claude-to-Cursor event
   and tool-name mappings:

@@ -23,12 +23,12 @@ Portable fields are eligible for cross-agent rendering. Native extension fields
 are keyed by source agent and preserved when a target cannot represent them.
 
 Subagents preserve name, description, body, and frontmatter for Markdown
-subagent or agent-preset files in scan/status reports. Portable subagents can
-render to Codex, Claude Code, Cline, and OpenCode targets. Tool policies,
-permissions, hooks, plugins, MCP fields, and native-only behavioral fields block
-rendering until their target semantics can be preserved. OpenCode JSON/JSONC
-`agent` config is discovered as blocked subagent behavior and preserves raw
-native text.
+subagent or agent-preset files, and read Codex `.codex/agents/*.toml` custom
+agent files through the same normalized fields. Portable subagents can render to
+Codex, Claude Code, Cline, and OpenCode targets. Tool policies, permissions,
+hooks, plugins, MCP fields, and native-only behavioral fields block rendering
+until their target semantics can be preserved. OpenCode JSON/JSONC `agent`
+config is discovered as blocked subagent behavior and preserves raw native text.
 
 Commands are also selectable for planning, but they remain blocked for MVP sync
 because command resources can encode behavioral or executable workflows.

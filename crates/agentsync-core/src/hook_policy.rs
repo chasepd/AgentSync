@@ -135,6 +135,29 @@ pub const HOOK_EVENT_EQUIVALENCE: &[HookEquivalence] = &[
         ],
     },
     HookEquivalence {
+        canonical: "session.end",
+        purpose: "when an agent session ends",
+        mappings: &[
+            report_only(
+                Agent::Codex,
+                None,
+                "Codex does not document a SessionEnd hook event",
+            ),
+            direct(Agent::Claude, "SessionEnd"),
+            report_only(
+                Agent::Cline,
+                None,
+                "no documented equivalent lifecycle hook for session end",
+            ),
+            report_only(
+                Agent::OpenCode,
+                Some("session.idle"),
+                "session idle is observable but not equivalent to session end",
+            ),
+            direct(Agent::CursorCli, "sessionEnd"),
+        ],
+    },
+    HookEquivalence {
         canonical: "prompt.submit",
         purpose: "when the user submits a prompt before the model turn begins",
         mappings: &[

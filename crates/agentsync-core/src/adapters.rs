@@ -97,15 +97,17 @@ impl AgentAdapter for CodexAdapter {
 
     fn discover(&self, root: &Path, scope: Scope) -> Result<Vec<NativeResource>, AgentSyncError> {
         let mut resources = Vec::new();
-        let (rules, skills, hook_files) = match scope {
+        let (rules, skills, agent_dir, hook_files) = match scope {
             Scope::Project => (
                 "AGENTS.md",
-                [".codex/skills", ".agents/skills"],
+                [".agents/skills", ".codex/skills"],
+                ".codex/agents",
                 [".codex/hooks.json"],
             ),
             Scope::User => (
                 ".codex/AGENTS.md",
-                [".codex/skills", ".agents/skills"],
+                [".agents/skills", ".codex/skills"],
+                ".codex/agents",
                 [".codex/hooks.json"],
             ),
             Scope::All => return Ok(Vec::new()),
@@ -119,6 +121,14 @@ impl AgentAdapter for CodexAdapter {
             scope,
         );
         discover_skill_dirs(&mut resources, root, self.agent(), skills, scope);
+        discover_toml_dir(
+            &mut resources,
+            root,
+            self.agent(),
+            ResourceKind::Subagent,
+            agent_dir,
+            scope,
+        );
         discover_json_key_files(
             &mut resources,
             root,
@@ -421,42 +431,75 @@ impl AgentAdapter for CursorCliAdapter {
     }
 
     fn discover(&self, root: &Path, scope: Scope) -> Result<Vec<NativeResource>, AgentSyncError> {
-        if scope != Scope::Project {
-            return Ok(Vec::new());
-        }
         let mut resources = Vec::new();
-        push_if_exists(
-            &mut resources,
-            root,
-            self.agent(),
-            ResourceKind::RuleSet,
-            "AGENTS.md",
-            scope,
-        );
-        discover_md_dir(
-            &mut resources,
-            root,
-            self.agent(),
-            ResourceKind::RuleSet,
-            ".cursor/rules",
-            scope,
-        );
-        discover_skill_dirs(
-            &mut resources,
-            root,
-            self.agent(),
-            [".cursor/skills"],
-            scope,
-        );
-        discover_json_key_files(
-            &mut resources,
-            root,
-            self.agent(),
-            ResourceKind::Hook,
-            [".cursor/hooks.json"],
-            "hooks",
-            scope,
-        );
+        match scope {
+            Scope::Project => {
+                for rules in ["AGENTS.md", "CLAUDE.md"] {
+                    push_if_exists(
+                        &mut resources,
+                        root,
+                        self.agent(),
+                        ResourceKind::RuleSet,
+                        rules,
+                        scope,
+                    );
+                }
+                discover_ext_dir(
+                    &mut resources,
+                    root,
+                    self.agent(),
+                    ResourceKind::RuleSet,
+                    ".cursor/rules",
+                    &["mdc"],
+                    scope,
+                );
+                discover_skill_dirs(
+                    &mut resources,
+                    root,
+                    self.agent(),
+                    [
+                        ".cursor/skills",
+                        ".agents/skills",
+                        ".claude/skills",
+                        ".codex/skills",
+                    ],
+                    scope,
+                );
+                discover_json_key_files(
+                    &mut resources,
+                    root,
+                    self.agent(),
+                    ResourceKind::Hook,
+                    [".cursor/hooks.json"],
+                    "hooks",
+                    scope,
+                );
+            }
+            Scope::User => {
+                discover_skill_dirs(
+                    &mut resources,
+                    root,
+                    self.agent(),
+                    [
+                        ".cursor/skills",
+                        ".agents/skills",
+                        ".claude/skills",
+                        ".codex/skills",
+                    ],
+                    scope,
+                );
+                discover_json_key_files(
+                    &mut resources,
+                    root,
+                    self.agent(),
+                    ResourceKind::Hook,
+                    [".cursor/hooks.json"],
+                    "hooks",
+                    scope,
+                );
+            }
+            Scope::All => {}
+        }
         Ok(resources)
     }
 
@@ -490,22 +533,32 @@ impl AgentAdapter for OpenCodeAdapter {
 
     fn discover(&self, root: &Path, scope: Scope) -> Result<Vec<NativeResource>, AgentSyncError> {
         let mut resources = Vec::new();
-        let (rules, config_files, skill_dirs, agent_dir, command_dir, plugin_dir) = match scope {
+        let (rules, config_files, skill_dirs, agent_dirs, command_dirs, plugin_dirs) = match scope {
             Scope::Project => (
                 "AGENTS.md",
                 OPENCODE_CONFIG_FILES,
-                [".opencode/skills"],
-                ".opencode/agents",
-                ".opencode/commands",
-                ".opencode/plugins",
+                [
+                    ".opencode/skills",
+                    ".opencode/skill",
+                    ".agents/skills",
+                    ".claude/skills",
+                ],
+                [".opencode/agents", ".opencode/agent"],
+                [".opencode/commands", ".opencode/command"],
+                [".opencode/plugins", ".opencode/plugin"],
             ),
             Scope::User => (
                 ".config/opencode/AGENTS.md",
                 OPENCODE_USER_CONFIG_FILES,
-                [".config/opencode/skills"],
-                ".config/opencode/agents",
-                ".config/opencode/commands",
-                ".config/opencode/plugins",
+                [
+                    ".config/opencode/skills",
+                    ".config/opencode/skill",
+                    ".agents/skills",
+                    ".claude/skills",
+                ],
+                [".config/opencode/agents", ".config/opencode/agent"],
+                [".config/opencode/commands", ".config/opencode/command"],
+                [".config/opencode/plugins", ".config/opencode/plugin"],
             ),
             Scope::All => return Ok(resources),
         };
@@ -517,6 +570,21 @@ impl AgentAdapter for OpenCodeAdapter {
             rules,
             scope,
         );
+        let claude_fallback = match scope {
+            Scope::Project => "CLAUDE.md",
+            Scope::User => ".claude/CLAUDE.md",
+            Scope::All => "",
+        };
+        if !claude_fallback.is_empty() && !root.join(rules).is_file() {
+            push_if_exists(
+                &mut resources,
+                root,
+                self.agent(),
+                ResourceKind::RuleSet,
+                claude_fallback,
+                scope,
+            );
+        }
         for file in config_files {
             push_if_exists(
                 &mut resources,
@@ -528,14 +596,16 @@ impl AgentAdapter for OpenCodeAdapter {
             );
         }
         discover_skill_dirs(&mut resources, root, self.agent(), skill_dirs, scope);
-        discover_md_dir(
-            &mut resources,
-            root,
-            self.agent(),
-            ResourceKind::Subagent,
-            agent_dir,
-            scope,
-        );
+        for dir in agent_dirs {
+            discover_md_dir(
+                &mut resources,
+                root,
+                self.agent(),
+                ResourceKind::Subagent,
+                dir,
+                scope,
+            );
+        }
         discover_json_key_files(
             &mut resources,
             root,
@@ -545,24 +615,28 @@ impl AgentAdapter for OpenCodeAdapter {
             "agent",
             scope,
         );
-        discover_md_dir(
-            &mut resources,
-            root,
-            self.agent(),
-            ResourceKind::Command,
-            command_dir,
-            scope,
-        );
+        for dir in command_dirs {
+            discover_md_dir(
+                &mut resources,
+                root,
+                self.agent(),
+                ResourceKind::Command,
+                dir,
+                scope,
+            );
+        }
         discover_opencode_config_commands(&mut resources, root, config_files, scope);
-        discover_ext_dir(
-            &mut resources,
-            root,
-            self.agent(),
-            ResourceKind::Plugin,
-            plugin_dir,
-            &["cjs", "cts", "js", "mjs", "mts", "ts"],
-            scope,
-        );
+        for dir in plugin_dirs {
+            discover_ext_dir(
+                &mut resources,
+                root,
+                self.agent(),
+                ResourceKind::Plugin,
+                dir,
+                &["cjs", "cts", "js", "mjs", "mts", "ts"],
+                scope,
+            );
+        }
         discover_json_key_files(
             &mut resources,
             root,
@@ -677,21 +751,50 @@ fn discover_skill_dirs<const N: usize>(
     scope: Scope,
 ) {
     for dir in dirs {
-        if let Ok(entries) = fs::read_dir(root.join(dir)) {
-            for entry in entries.flatten() {
-                let skill = entry.path().join("SKILL.md");
-                if skill.is_file() {
-                    if let Ok(rel) = skill.strip_prefix(root) {
-                        resources.push(native(
-                            agent,
-                            ResourceKind::Skill,
-                            &rel.to_string_lossy(),
-                            scope,
-                        ));
-                    }
-                }
-            }
+        discover_skill_dir(resources, root, agent, &root.join(dir), scope);
+    }
+}
+
+fn discover_skill_dir(
+    resources: &mut Vec<NativeResource>,
+    root: &Path,
+    agent: Agent,
+    abs: &Path,
+    scope: Scope,
+) {
+    if !abs.exists() {
+        return;
+    }
+    let skill = abs.join("SKILL.md");
+    if skill.is_file() {
+        if let Ok(rel) = skill.strip_prefix(root) {
+            resources.push(native(
+                agent,
+                ResourceKind::Skill,
+                &rel.to_string_lossy(),
+                scope,
+            ));
         }
+        return;
+    }
+
+    let Ok(entries) = fs::read_dir(abs) else {
+        return;
+    };
+    let mut child_dirs = entries
+        .flatten()
+        .filter_map(|entry| {
+            let path = entry.path();
+            let is_real_dir = entry
+                .file_type()
+                .ok()
+                .is_some_and(|file_type| file_type.is_dir());
+            (is_real_dir || path.join("SKILL.md").is_file()).then_some(path)
+        })
+        .collect::<Vec<_>>();
+    child_dirs.sort();
+    for child_dir in child_dirs {
+        discover_skill_dir(resources, root, agent, &child_dir, scope);
     }
 }
 
@@ -711,6 +814,30 @@ fn discover_md_dir(
         if entry.file_type().is_file() {
             let path = entry.path();
             if path.extension().and_then(|ext| ext.to_str()) == Some("md") {
+                if let Ok(rel) = path.strip_prefix(root) {
+                    resources.push(native(agent, kind, &rel.to_string_lossy(), scope));
+                }
+            }
+        }
+    }
+}
+
+fn discover_toml_dir(
+    resources: &mut Vec<NativeResource>,
+    root: &Path,
+    agent: Agent,
+    kind: ResourceKind,
+    dir: &str,
+    scope: Scope,
+) {
+    let abs = root.join(dir);
+    if !abs.exists() {
+        return;
+    }
+    for entry in WalkDir::new(abs).into_iter().flatten() {
+        if entry.file_type().is_file() {
+            let path = entry.path();
+            if path.extension().and_then(|ext| ext.to_str()) == Some("toml") {
                 if let Ok(rel) = path.strip_prefix(root) {
                     resources.push(native(agent, kind, &rel.to_string_lossy(), scope));
                 }
@@ -888,6 +1015,9 @@ fn normalize_native(
 ) -> Result<NormalizedResource, AgentSyncError> {
     match native.kind {
         ResourceKind::RuleSet => normalize_rule(root, native),
+        ResourceKind::Subagent if native.agent == Agent::Codex && is_toml_file(&native.path) => {
+            normalize_codex_subagent(root, native)
+        }
         ResourceKind::Skill => normalize_skill(root, native),
         ResourceKind::Subagent
             if native.agent == Agent::OpenCode && is_opencode_config(&native.path) =>
@@ -912,6 +1042,9 @@ fn normalize_rule(
     root: &Path,
     native: &NativeResource,
 ) -> Result<NormalizedResource, AgentSyncError> {
+    if native.agent == Agent::CursorCli && is_cursor_rule_file(&native.path) {
+        return normalize_cursor_rule(root, native);
+    }
     if native.agent == Agent::OpenCode && is_opencode_config(&native.path) {
         return normalize_opencode_config_rules(root, native);
     }
@@ -933,6 +1066,54 @@ fn normalize_rule(
         native_extensions: BTreeMap::new(),
         diagnostics: Vec::new(),
         support: SupportLevel::Portable,
+    })
+}
+
+fn normalize_cursor_rule(
+    root: &Path,
+    native: &NativeResource,
+) -> Result<NormalizedResource, AgentSyncError> {
+    let raw = fs::read_to_string(root.join(&native.path))?;
+    let (frontmatter, body) = split_frontmatter(&raw).map_err(|error| {
+        AgentSyncError::Adapter(format!(
+            "failed to parse frontmatter in {}: {error}",
+            native.path.display()
+        ))
+    })?;
+    let mut native_extensions = BTreeMap::new();
+    let mut diagnostics = Vec::new();
+    let support = if frontmatter.is_empty() {
+        SupportLevel::Portable
+    } else {
+        diagnostics.push(Diagnostic {
+            severity: DiagnosticSeverity::Warning,
+            resource_id: Some(native.id.clone()),
+            resource_kind: Some(ResourceKind::RuleSet),
+            agent: Some(native.agent),
+            message: format!(
+                "cursor rule frontmatter controls rule activation and is preserved but not rendered to non-Cursor targets: {}",
+                frontmatter.keys().cloned().collect::<Vec<_>>().join(", ")
+            ),
+        });
+        native_extensions.insert(
+            "frontmatter.native".to_string(),
+            Value::Object(frontmatter.into_iter().collect()),
+        );
+        SupportLevel::Partial
+    };
+    Ok(NormalizedResource {
+        id: native.id.clone(),
+        kind: ResourceKind::RuleSet,
+        scope: native.scope,
+        source_agent: native.agent,
+        native_paths: vec![native.path.clone()],
+        rule_set: Some(RuleSet { body }),
+        skill: None,
+        subagent: None,
+        command: None,
+        native_extensions,
+        diagnostics,
+        support,
     })
 }
 
@@ -1073,6 +1254,18 @@ fn is_opencode_config(path: &Path) -> bool {
     path.file_name()
         .and_then(|name| name.to_str())
         .is_some_and(|name| name == "opencode.json" || name == "opencode.jsonc")
+}
+
+fn is_cursor_rule_file(path: &Path) -> bool {
+    path.extension()
+        .and_then(|ext| ext.to_str())
+        .is_some_and(|ext| ext == "mdc")
+}
+
+fn is_toml_file(path: &Path) -> bool {
+    path.extension()
+        .and_then(|ext| ext.to_str())
+        .is_some_and(|ext| ext == "toml")
 }
 
 fn opencode_instruction_diagnostic(native: &NativeResource, message: &str) -> Diagnostic {
@@ -1278,6 +1471,202 @@ fn normalize_subagent(
             tools,
             permissions,
             mode,
+            frontmatter,
+        }),
+        command: None,
+        native_extensions,
+        diagnostics,
+        support,
+    })
+}
+
+fn normalize_codex_subagent(
+    root: &Path,
+    native: &NativeResource,
+) -> Result<NormalizedResource, AgentSyncError> {
+    let raw = fs::read_to_string(root.join(&native.path))?;
+    let value = raw.parse::<toml::Value>()?;
+    let table = value.as_table().ok_or_else(|| {
+        AgentSyncError::Adapter(format!(
+            "failed to parse {} as a Codex custom agent table",
+            native.path.display()
+        ))
+    })?;
+    let frontmatter = table
+        .iter()
+        .map(|(key, value)| {
+            serde_json::to_value(value)
+                .map(|value| (key.clone(), value))
+                .map_err(AgentSyncError::SerdeJson)
+        })
+        .collect::<Result<BTreeMap<_, _>, _>>()?;
+    let explicit_name = table
+        .get("name")
+        .and_then(toml::Value::as_str)
+        .filter(|name| !name.trim().is_empty());
+    let name = explicit_name
+        .map(ToOwned::to_owned)
+        .or_else(|| {
+            native
+                .path
+                .file_stem()
+                .and_then(|name| name.to_str())
+                .map(ToOwned::to_owned)
+        })
+        .unwrap_or_else(|| "subagent".to_string());
+    let description = table
+        .get("description")
+        .and_then(toml::Value::as_str)
+        .filter(|description| !description.trim().is_empty())
+        .map(ToOwned::to_owned);
+    let developer_instructions = table
+        .get("developer_instructions")
+        .and_then(toml::Value::as_str)
+        .filter(|instructions| !instructions.trim().is_empty());
+    let legacy_instructions = table
+        .get("instructions")
+        .and_then(toml::Value::as_str)
+        .filter(|instructions| !instructions.trim().is_empty());
+    let instructions = developer_instructions
+        .or(legacy_instructions)
+        .map(ToOwned::to_owned)
+        .unwrap_or_default();
+    let model = table
+        .get("model")
+        .and_then(toml::Value::as_str)
+        .map(ToOwned::to_owned);
+    let effort = table
+        .get("model_reasoning_effort")
+        .or_else(|| table.get("effort"))
+        .and_then(toml::Value::as_str)
+        .map(ToOwned::to_owned);
+
+    let mut diagnostics = Vec::new();
+    let mut support = SupportLevel::Portable;
+    if explicit_name.is_some() {
+        diagnostics.push(subagent_field_diagnostic(native, "subagent.name: portable"));
+    } else {
+        support = SupportLevel::Blocked;
+        diagnostics.push(subagent_field_diagnostic(
+            native,
+            "subagent.name: blocked because Codex custom agents require name",
+        ));
+    }
+    if !is_safe_file_stem(&name) {
+        support = SupportLevel::Blocked;
+        diagnostics.push(subagent_field_diagnostic(
+            native,
+            "subagent.name: blocked because rendered file names may not contain path separators",
+        ));
+    }
+    if description.is_some() {
+        diagnostics.push(subagent_field_diagnostic(
+            native,
+            "subagent.description: portable",
+        ));
+    } else {
+        support = SupportLevel::Blocked;
+        diagnostics.push(subagent_field_diagnostic(
+            native,
+            "subagent.description: blocked because Codex custom agents require description",
+        ));
+    }
+    if developer_instructions.is_some() {
+        diagnostics.push(subagent_field_diagnostic(
+            native,
+            "subagent.instructions: portable",
+        ));
+    } else if legacy_instructions.is_some() {
+        if support == SupportLevel::Portable {
+            support = SupportLevel::Partial;
+        }
+        diagnostics.push(subagent_field_diagnostic(
+            native,
+            "subagent.instructions: partial because legacy instructions render as developer_instructions",
+        ));
+    } else {
+        support = SupportLevel::Blocked;
+        diagnostics.push(subagent_field_diagnostic(
+            native,
+            "subagent.instructions: blocked because Codex custom agents require developer_instructions",
+        ));
+    }
+    if model.is_some() {
+        if support == SupportLevel::Portable {
+            support = SupportLevel::Partial;
+        }
+        diagnostics.push(subagent_field_diagnostic(native, "subagent.model: partial"));
+    }
+    if effort.is_some() {
+        if support == SupportLevel::Portable {
+            support = SupportLevel::Partial;
+        }
+        diagnostics.push(subagent_field_diagnostic(
+            native,
+            "subagent.effort: partial",
+        ));
+    }
+
+    let supported_keys = [
+        "name",
+        "description",
+        "developer_instructions",
+        "instructions",
+        "model",
+        "model_reasoning_effort",
+        "effort",
+    ];
+    let unsupported = frontmatter
+        .iter()
+        .filter(|(key, _)| !supported_keys.contains(&key.as_str()))
+        .map(|(key, value)| (key.clone(), value.clone()))
+        .collect::<BTreeMap<_, _>>();
+    let mut native_extensions = BTreeMap::new();
+    if !unsupported.is_empty() {
+        if support == SupportLevel::Portable {
+            support = SupportLevel::Partial;
+        }
+        diagnostics.push(Diagnostic {
+            severity: DiagnosticSeverity::Warning,
+            resource_id: Some(native.id.clone()),
+            resource_kind: Some(ResourceKind::Subagent),
+            agent: Some(native.agent),
+            message: format!(
+                "subagents frontmatter contains native-only fields that are preserved but not rendered: {}",
+                unsupported.keys().cloned().collect::<Vec<_>>().join(", ")
+            ),
+        });
+        native_extensions.insert(
+            "frontmatter.native".to_string(),
+            Value::Object(unsupported.into_iter().collect()),
+        );
+    }
+    if native_extensions.contains_key("frontmatter.native") {
+        support = SupportLevel::Blocked;
+        diagnostics.push(subagent_field_diagnostic(
+            native,
+            "subagent.native_extensions: blocked until native-only fields can be rendered safely",
+        ));
+    }
+
+    Ok(NormalizedResource {
+        id: format!("subagents:{name}"),
+        kind: ResourceKind::Subagent,
+        scope: native.scope,
+        source_agent: native.agent,
+        native_paths: vec![native.path.clone()],
+        rule_set: None,
+        skill: None,
+        subagent: Some(Subagent {
+            name,
+            description,
+            body: instructions.clone(),
+            instructions,
+            model,
+            effort,
+            tools: ToolPolicy::default(),
+            permissions: BTreeMap::new(),
+            mode: None,
             frontmatter,
         }),
         command: None,
@@ -2074,15 +2463,20 @@ fn render_rules(
         Agent::Codex | Agent::OpenCode => PathBuf::from("AGENTS.md"),
         Agent::Claude => PathBuf::from("CLAUDE.md"),
         Agent::Cline => PathBuf::from(".clinerules/agentsync.md"),
-        Agent::CursorCli => PathBuf::from(".cursor/rules/agentsync.md"),
+        Agent::CursorCli => PathBuf::from(".cursor/rules/agentsync.mdc"),
     };
-    Ok((
-        vec![RenderedFile {
-            path,
-            contents: body.clone(),
-        }],
-        Vec::new(),
-    ))
+    let contents = if target == Agent::CursorCli {
+        render_cursor_rule_contents(body)
+    } else {
+        body.clone()
+    };
+    Ok((vec![RenderedFile { path, contents }], Vec::new()))
+}
+
+fn render_cursor_rule_contents(body: &str) -> String {
+    let mut contents = String::from("---\nalwaysApply: true\n---\n");
+    contents.push_str(body);
+    contents
 }
 
 fn render_skill(
@@ -2252,21 +2646,31 @@ fn render_codex_subagent(
         "name".to_string(),
         toml::Value::String(subagent.name.clone()),
     );
-    if let Some(description) = &subagent.description {
-        table.insert(
-            "description".to_string(),
-            toml::Value::String(description.clone()),
-        );
-    }
+    let description = subagent
+        .description
+        .as_ref()
+        .filter(|description| !description.trim().is_empty())
+        .ok_or_else(|| {
+            AgentSyncError::InvalidArgument(
+                "Codex custom agents require a non-empty subagent.description".to_string(),
+            )
+        })?;
     table.insert(
-        "instructions".to_string(),
+        "description".to_string(),
+        toml::Value::String(description.clone()),
+    );
+    table.insert(
+        "developer_instructions".to_string(),
         toml::Value::String(subagent.instructions.clone()),
     );
     if let Some(model) = &subagent.model {
         table.insert("model".to_string(), toml::Value::String(model.clone()));
     }
     if let Some(effort) = &subagent.effort {
-        table.insert("effort".to_string(), toml::Value::String(effort.clone()));
+        table.insert(
+            "model_reasoning_effort".to_string(),
+            toml::Value::String(effort.clone()),
+        );
     }
     Ok((
         vec![RenderedFile {
@@ -3492,6 +3896,7 @@ fn render_hook_event_name(event: &str, source: Agent, target: Agent) -> Option<S
         (Agent::Codex | Agent::Claude, Agent::CursorCli, "SessionStart") => {
             Some("sessionStart".to_string())
         }
+        (Agent::Claude, Agent::CursorCli, "SessionEnd") => Some("sessionEnd".to_string()),
         (Agent::Codex | Agent::Claude, Agent::CursorCli, "UserPromptSubmit") => {
             Some("beforeSubmitPrompt".to_string())
         }
@@ -3531,6 +3936,7 @@ fn render_hook_event_name(event: &str, source: Agent, target: Agent) -> Option<S
         (Agent::CursorCli, Agent::Codex | Agent::Claude, "sessionStart") => {
             Some("SessionStart".to_string())
         }
+        (Agent::CursorCli, Agent::Claude, "sessionEnd") => Some("SessionEnd".to_string()),
         (Agent::CursorCli, Agent::Codex | Agent::Claude, "beforeSubmitPrompt") => {
             Some("UserPromptSubmit".to_string())
         }
@@ -4006,6 +4412,76 @@ mod tests {
     }
 
     #[test]
+    fn codex_adapter_discovers_custom_agent_toml() {
+        let dir = tempdir().unwrap();
+        fs::create_dir_all(dir.path().join(".codex/agents")).unwrap();
+        fs::write(
+            dir.path().join(".codex/agents/reviewer.toml"),
+            r#"name = "reviewer"
+description = "Review code"
+developer_instructions = "Review carefully."
+model = "gpt-5.1-codex"
+model_reasoning_effort = "high"
+"#,
+        )
+        .unwrap();
+
+        let resources = CodexAdapter.discover(dir.path(), Scope::Project).unwrap();
+        let agent = resources
+            .iter()
+            .find(|resource| {
+                resource.kind == ResourceKind::Subagent
+                    && resource.path == Path::new(".codex/agents/reviewer.toml")
+            })
+            .unwrap();
+        let resource = CodexAdapter.read(dir.path(), agent).unwrap();
+        let subagent = resource.subagent.as_ref().unwrap();
+
+        assert_eq!(resource.support, SupportLevel::Partial);
+        assert_eq!(resource.id, "subagents:reviewer");
+        assert_eq!(subagent.description.as_deref(), Some("Review code"));
+        assert_eq!(subagent.instructions, "Review carefully.");
+        assert_eq!(subagent.model.as_deref(), Some("gpt-5.1-codex"));
+        assert_eq!(subagent.effort.as_deref(), Some("high"));
+        assert!(resource
+            .diagnostics
+            .iter()
+            .any(|diagnostic| diagnostic.message == "subagent.effort: partial"));
+    }
+
+    #[test]
+    fn codex_adapter_blocks_custom_agent_missing_required_fields() {
+        let dir = tempdir().unwrap();
+        fs::create_dir_all(dir.path().join(".codex/agents")).unwrap();
+        fs::write(
+            dir.path().join(".codex/agents/reviewer.toml"),
+            r#"developer_instructions = "Review carefully."
+"#,
+        )
+        .unwrap();
+
+        let native = NativeResource {
+            id: "subagents:codex:.codex/agents/reviewer.toml".to_string(),
+            agent: Agent::Codex,
+            kind: ResourceKind::Subagent,
+            scope: Scope::Project,
+            path: PathBuf::from(".codex/agents/reviewer.toml"),
+        };
+        let resource = CodexAdapter.read(dir.path(), &native).unwrap();
+
+        assert_eq!(resource.support, SupportLevel::Blocked);
+        assert!(resource
+            .diagnostics
+            .iter()
+            .any(|diagnostic| diagnostic.message
+                == "subagent.name: blocked because Codex custom agents require name"));
+        assert!(resource.diagnostics.iter().any(|diagnostic| {
+            diagnostic.message
+                == "subagent.description: blocked because Codex custom agents require description"
+        }));
+    }
+
+    #[test]
     fn claude_adapter_discovers_owned_project_paths() {
         let dir = tempdir().unwrap();
         fs::write(dir.path().join("CLAUDE.md"), "rules\n").unwrap();
@@ -4105,6 +4581,85 @@ mod tests {
         assert!(resource.diagnostics.iter().any(|diagnostic| diagnostic
             .message
             .contains("hook.preToolUse: executable hook behavior requires compatibility mapping")));
+    }
+
+    #[test]
+    fn cursor_adapter_discovers_mdc_rules_and_compatible_skills() {
+        let dir = tempdir().unwrap();
+        fs::create_dir_all(dir.path().join(".cursor/rules")).unwrap();
+        fs::write(
+            dir.path().join(".cursor/rules/testing.mdc"),
+            "---\ndescription: Test rules\nalwaysApply: false\n---\nUse cargo test.\n",
+        )
+        .unwrap();
+        fs::create_dir_all(dir.path().join(".agents/skills/review")).unwrap();
+        fs::write(
+            dir.path().join(".agents/skills/review/SKILL.md"),
+            "---\nname: review\ndescription: Review code\n---\nReview.\n",
+        )
+        .unwrap();
+        fs::create_dir_all(dir.path().join(".cursor/skills/workflow/tdd/references")).unwrap();
+        fs::write(
+            dir.path().join(".cursor/skills/workflow/tdd/SKILL.md"),
+            "---\nname: tdd\ndescription: TDD workflow\n---\nTest first.\n",
+        )
+        .unwrap();
+        fs::write(
+            dir.path()
+                .join(".cursor/skills/workflow/tdd/references/SKILL.md"),
+            "---\nname: reference\ndescription: Internal reference\n---\nInternal.\n",
+        )
+        .unwrap();
+        #[cfg(unix)]
+        {
+            let linked_skill = dir.path().join("linked-skill-source");
+            fs::create_dir_all(&linked_skill).unwrap();
+            fs::write(
+                linked_skill.join("SKILL.md"),
+                "---\nname: linked\ndescription: Linked skill\n---\nLinked.\n",
+            )
+            .unwrap();
+            std::os::unix::fs::symlink(&linked_skill, dir.path().join(".cursor/skills/linked"))
+                .unwrap();
+        }
+
+        let resources = CursorCliAdapter
+            .discover(dir.path(), Scope::Project)
+            .unwrap();
+
+        assert!(resources.iter().any(|resource| {
+            resource.kind == ResourceKind::RuleSet
+                && resource.path == Path::new(".cursor/rules/testing.mdc")
+        }));
+        assert!(resources.iter().any(|resource| {
+            resource.kind == ResourceKind::Skill
+                && resource.path == Path::new(".agents/skills/review/SKILL.md")
+        }));
+        assert!(resources.iter().any(|resource| {
+            resource.kind == ResourceKind::Skill
+                && resource.path == Path::new(".cursor/skills/workflow/tdd/SKILL.md")
+        }));
+        assert!(!resources.iter().any(|resource| {
+            resource.kind == ResourceKind::Skill
+                && resource.path == Path::new(".cursor/skills/workflow/tdd/references/SKILL.md")
+        }));
+        #[cfg(unix)]
+        assert!(resources.iter().any(|resource| {
+            resource.kind == ResourceKind::Skill
+                && resource.path == Path::new(".cursor/skills/linked/SKILL.md")
+        }));
+
+        let rule = resources
+            .iter()
+            .find(|resource| resource.path == Path::new(".cursor/rules/testing.mdc"))
+            .unwrap();
+        let rule = CursorCliAdapter.read(dir.path(), rule).unwrap();
+
+        assert_eq!(rule.support, SupportLevel::Partial);
+        assert_eq!(rule.rule_set.unwrap().body, "Use cargo test.\n");
+        assert!(rule.diagnostics.iter().any(|diagnostic| diagnostic
+            .message
+            .contains("cursor rule frontmatter controls rule activation")));
     }
 
     #[test]
@@ -4289,8 +4844,43 @@ mod tests {
         let (files, diagnostics) = CursorCliAdapter.render(&resource).unwrap();
 
         assert!(diagnostics.is_empty());
-        assert_eq!(files[0].path, Path::new(".cursor/rules/agentsync.md"));
-        assert_eq!(files[0].contents, "rules\n");
+        assert_eq!(files[0].path, Path::new(".cursor/rules/agentsync.mdc"));
+        assert_eq!(files[0].contents, "---\nalwaysApply: true\n---\nrules\n");
+    }
+
+    #[test]
+    fn codex_subagent_render_requires_description() {
+        let resource = NormalizedResource {
+            id: "subagents:reviewer".to_string(),
+            kind: ResourceKind::Subagent,
+            scope: Scope::Project,
+            source_agent: Agent::Claude,
+            native_paths: vec![PathBuf::from(".claude/agents/reviewer.md")],
+            rule_set: None,
+            skill: None,
+            subagent: Some(Subagent {
+                name: "reviewer".to_string(),
+                description: None,
+                body: "Review carefully.\n".to_string(),
+                instructions: "Review carefully.\n".to_string(),
+                model: None,
+                effort: None,
+                tools: ToolPolicy::default(),
+                permissions: BTreeMap::new(),
+                mode: None,
+                frontmatter: BTreeMap::new(),
+            }),
+            command: None,
+            native_extensions: BTreeMap::new(),
+            diagnostics: Vec::new(),
+            support: SupportLevel::Portable,
+        };
+
+        let error = CodexAdapter.render(&resource).unwrap_err();
+
+        assert!(error
+            .to_string()
+            .contains("Codex custom agents require a non-empty subagent.description"));
     }
 
     #[test]
@@ -4514,6 +5104,82 @@ Body
             resource.rule_set.unwrap().body,
             "<!-- docs/rules.md -->\nproject rules\n"
         );
+    }
+
+    #[test]
+    fn opencode_adapter_discovers_claude_rule_fallback_and_compatible_skills() {
+        let dir = tempdir().unwrap();
+        fs::write(dir.path().join("CLAUDE.md"), "claude fallback\n").unwrap();
+        fs::create_dir_all(dir.path().join(".agents/skills/release")).unwrap();
+        fs::write(
+            dir.path().join(".agents/skills/release/SKILL.md"),
+            "---\nname: release\ndescription: Release work\n---\nRelease.\n",
+        )
+        .unwrap();
+        fs::create_dir_all(dir.path().join(".claude/skills/review")).unwrap();
+        fs::write(
+            dir.path().join(".claude/skills/review/SKILL.md"),
+            "---\nname: review\ndescription: Review work\n---\nReview.\n",
+        )
+        .unwrap();
+
+        let resources = OpenCodeAdapter
+            .discover(dir.path(), Scope::Project)
+            .unwrap();
+
+        assert!(resources.iter().any(|resource| {
+            resource.kind == ResourceKind::RuleSet && resource.path == Path::new("CLAUDE.md")
+        }));
+        assert!(resources.iter().any(|resource| {
+            resource.kind == ResourceKind::Skill
+                && resource.path == Path::new(".agents/skills/release/SKILL.md")
+        }));
+        assert!(resources.iter().any(|resource| {
+            resource.kind == ResourceKind::Skill
+                && resource.path == Path::new(".claude/skills/review/SKILL.md")
+        }));
+    }
+
+    #[test]
+    fn opencode_adapter_discovers_singular_compatibility_dirs() {
+        let dir = tempdir().unwrap();
+        fs::create_dir_all(dir.path().join(".opencode/skill/review")).unwrap();
+        fs::write(
+            dir.path().join(".opencode/skill/review/SKILL.md"),
+            "---\nname: review\ndescription: Review work\n---\nReview.\n",
+        )
+        .unwrap();
+        fs::create_dir_all(dir.path().join(".opencode/agent")).unwrap();
+        fs::write(
+            dir.path().join(".opencode/agent/reviewer.md"),
+            "---\nname: reviewer\ndescription: Review code\n---\nReview.\n",
+        )
+        .unwrap();
+        fs::create_dir_all(dir.path().join(".opencode/command")).unwrap();
+        fs::write(dir.path().join(".opencode/command/deploy.md"), "Deploy.\n").unwrap();
+        fs::create_dir_all(dir.path().join(".opencode/plugin")).unwrap();
+        fs::write(dir.path().join(".opencode/plugin/hooks.js"), "export {};\n").unwrap();
+
+        let resources = OpenCodeAdapter
+            .discover(dir.path(), Scope::Project)
+            .unwrap();
+
+        assert!(resources.iter().any(|resource| {
+            resource.kind == ResourceKind::Skill
+                && resource.path == Path::new(".opencode/skill/review/SKILL.md")
+        }));
+        assert!(resources.iter().any(|resource| {
+            resource.kind == ResourceKind::Subagent
+                && resource.path == Path::new(".opencode/agent/reviewer.md")
+        }));
+        assert!(resources.iter().any(|resource| {
+            resource.kind == ResourceKind::Command
+                && resource.path == Path::new(".opencode/command/deploy.md")
+        }));
+        assert!(resources.iter().any(|resource| {
+            resource.kind == ResourceKind::Plugin
+                && resource.path == Path::new(".opencode/plugin/hooks.js")
+        }));
     }
 
     #[test]
