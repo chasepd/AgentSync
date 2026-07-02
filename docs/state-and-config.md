@@ -49,7 +49,7 @@ agentsync sync --all --write
 
 `defaults.source = "all"` tells AgentSync to choose the changed source for each
 logical resource. `defaults.targets = ["all"]` expands to every supported target
-agent: Codex CLI, Claude Code, Cursor CLI, and OpenCode. This is useful for
+agent: Codex CLI, Claude Code, Cline CLI, Cursor CLI, and OpenCode. This is useful for
 repos where different contributors edit different native tools. If a repo has
 no state metadata yet and native files already disagree, run the first sync with
 an explicit `--from`.

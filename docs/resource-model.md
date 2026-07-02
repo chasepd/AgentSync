@@ -22,12 +22,13 @@ portable fields, native extension fields, and diagnostics.
 Portable fields are eligible for cross-agent rendering. Native extension fields
 are keyed by source agent and preserved when a target cannot represent them.
 
-Subagents are normalized read-only in the current MVP. AgentSync preserves name,
-description, body, and frontmatter for Markdown subagent files in scan/status
-reports. OpenCode JSON/JSONC `agent` config is discovered as blocked subagent
-behavior and preserves raw native text. `diff subagent` and `sync subagents`
-return blocked plan actions; rendering and write sync remain blocked until
-subagent conversion is explicitly supported.
+Subagents preserve name, description, body, and frontmatter for Markdown
+subagent or agent-preset files in scan/status reports. Portable subagents can
+render to Codex, Claude Code, Cline, and OpenCode targets. Tool policies,
+permissions, hooks, plugins, MCP fields, and native-only behavioral fields block
+rendering until their target semantics can be preserved. OpenCode JSON/JSONC
+`agent` config is discovered as blocked subagent behavior and preserves raw
+native text.
 
 Commands are also selectable for planning, but they remain blocked for MVP sync
 because command resources can encode behavioral or executable workflows.
@@ -37,11 +38,12 @@ rendering target files or updating state. OpenCode command files and
 command resources.
 
 Hooks follow the same safety model. Claude settings files, Codex
-`.codex/hooks.json` files, and Cursor `.cursor/hooks.json` files with a
-top-level `hooks` field are discovered as hook resources. Hook conversion uses
-the entry-by-entry policy in `docs/hook-equivalence-policy.md`: directly
-equivalent Codex/Claude/Cursor command hooks are partial render candidates,
-OpenCode shim-required entries can render to
+`.codex/hooks.json` files, Cline `.cline/hooks/*` files, and Cursor
+`.cursor/hooks.json` files with a top-level `hooks` field are discovered as hook
+resources. Hook conversion uses the entry-by-entry policy in
+`docs/hook-equivalence-policy.md`: directly equivalent Codex/Claude/Cursor
+command hooks are partial render candidates, Cline and OpenCode shim-required
+entries can render to `.cline/plugins/agentsync-hooks.js` or
 `.opencode/plugins/agentsync-hooks.js` when AgentSync has implemented the event
 and matcher adapter, and report-only entries remain diagnostics/native
 extensions.
@@ -50,11 +52,10 @@ Blocked behavioral resources preserve their raw native file text in native
 extensions so scan/status output can surface what was blocked without rendering
 or writing it.
 
-Native OpenCode plugins are discovered read-only when they appear in OpenCode
-plugin directories or OpenCode JSON/JSONC plugin config. They are blocked
-resources in the MVP and are not selectable for diff/sync rendering. The
-generated AgentSync OpenCode hook shim is a hook render target, not a portable
-plugin resource.
+Native Cline and OpenCode plugins are discovered read-only when they appear in
+native plugin directories or related config. They are blocked resources in the
+MVP and are not selectable for diff/sync rendering. Generated AgentSync Cline
+and OpenCode hook shims are hook render targets, not portable plugin resources.
 
 Permission policy is discovered read-only from Claude settings and OpenCode
 JSON/JSONC config. It is blocked in the MVP because permission semantics are

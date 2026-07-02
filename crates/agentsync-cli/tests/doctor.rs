@@ -22,7 +22,7 @@ fn doctor_json_reports_missing_state_as_non_blocking() {
 
     assert_eq!(json["state_present"], false);
     assert_eq!(json["state_valid"], true);
-    assert_eq!(json["resource_count"], 3);
+    assert_eq!(json["resource_count"], 4);
 }
 
 #[test]

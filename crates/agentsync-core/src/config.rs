@@ -79,6 +79,7 @@ fn parse_source(value: &str) -> Result<SourceAlias, String> {
         "agents-md" => Ok(SourceAlias::AgentsMd),
         "codex" => Ok(SourceAlias::Codex),
         "claude" => Ok(SourceAlias::Claude),
+        "cline" => Ok(SourceAlias::Cline),
         "cursor" | "cursor-cli" => Ok(SourceAlias::CursorCli),
         "opencode" => Ok(SourceAlias::OpenCode),
         _ => Err(format!("unsupported source `{value}`")),
@@ -89,6 +90,7 @@ fn parse_agent(value: &str) -> Result<Agent, String> {
     match value {
         "codex" => Ok(Agent::Codex),
         "claude" => Ok(Agent::Claude),
+        "cline" => Ok(Agent::Cline),
         "cursor" | "cursor-cli" => Ok(Agent::CursorCli),
         "opencode" => Ok(Agent::OpenCode),
         _ => Err(format!("unsupported target `{value}`")),
@@ -165,7 +167,7 @@ mod tests {
 [defaults]
 scope = "project"
 source = "agents-md"
-targets = ["claude", "cursor-cli", "opencode"]
+targets = ["claude", "cline", "cursor-cli", "opencode"]
 "#,
         )
         .unwrap();
@@ -174,7 +176,12 @@ targets = ["claude", "cursor-cli", "opencode"]
         assert_eq!(config.defaults.source, Some(SourceAlias::AgentsMd));
         assert_eq!(
             config.defaults.targets,
-            vec![Agent::Claude, Agent::CursorCli, Agent::OpenCode]
+            vec![
+                Agent::Claude,
+                Agent::Cline,
+                Agent::CursorCli,
+                Agent::OpenCode
+            ]
         );
     }
 

@@ -152,6 +152,7 @@ enum CliSource {
     AgentsMd,
     Codex,
     Claude,
+    Cline,
     #[value(name = "cursor", alias = "cursor-cli")]
     Cursor,
     Opencode,
@@ -162,6 +163,7 @@ enum CliAgent {
     All,
     Codex,
     Claude,
+    Cline,
     #[value(name = "cursor", alias = "cursor-cli")]
     Cursor,
     Opencode,
@@ -224,6 +226,7 @@ impl From<CliSource> for SourceAlias {
             CliSource::AgentsMd => Self::AgentsMd,
             CliSource::Codex => Self::Codex,
             CliSource::Claude => Self::Claude,
+            CliSource::Cline => Self::Cline,
             CliSource::Cursor => Self::CursorCli,
             CliSource::Opencode => Self::OpenCode,
         }
@@ -476,6 +479,7 @@ fn expand_cli_targets(to: Vec<CliAgent>) -> Vec<Agent> {
             }
             CliAgent::Codex => push_target(&mut targets, Agent::Codex),
             CliAgent::Claude => push_target(&mut targets, Agent::Claude),
+            CliAgent::Cline => push_target(&mut targets, Agent::Cline),
             CliAgent::Cursor => push_target(&mut targets, Agent::CursorCli),
             CliAgent::Opencode => push_target(&mut targets, Agent::OpenCode),
         }

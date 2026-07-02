@@ -77,6 +77,7 @@ pub fn built_in_adapters() -> Vec<Box<dyn AgentAdapter>> {
     vec![
         Box::new(CodexAdapter),
         Box::new(ClaudeAdapter),
+        Box::new(ClineAdapter),
         Box::new(CursorCliAdapter),
         Box::new(OpenCodeAdapter),
     ]
@@ -228,6 +229,182 @@ impl AgentAdapter for ClaudeAdapter {
         resource: &NormalizedResource,
     ) -> Result<(Vec<RenderedFile>, Vec<Diagnostic>), AgentSyncError> {
         render_native(resource, Agent::Claude)
+    }
+}
+
+#[derive(Debug)]
+pub struct ClineAdapter;
+
+impl AgentAdapter for ClineAdapter {
+    fn agent(&self) -> Agent {
+        Agent::Cline
+    }
+
+    fn capabilities(&self) -> AdapterCapabilities {
+        portable_capabilities(Agent::Cline)
+    }
+
+    fn discover(&self, root: &Path, scope: Scope) -> Result<Vec<NativeResource>, AgentSyncError> {
+        let mut resources = Vec::new();
+        match scope {
+            Scope::Project => {
+                push_if_exists(
+                    &mut resources,
+                    root,
+                    self.agent(),
+                    ResourceKind::RuleSet,
+                    "AGENTS.md",
+                    scope,
+                );
+                discover_ext_dir(
+                    &mut resources,
+                    root,
+                    self.agent(),
+                    ResourceKind::RuleSet,
+                    ".clinerules",
+                    &["md", "txt"],
+                    scope,
+                );
+                discover_ext_dir(
+                    &mut resources,
+                    root,
+                    self.agent(),
+                    ResourceKind::RuleSet,
+                    ".cline/rules",
+                    &["md", "txt"],
+                    scope,
+                );
+                discover_skill_dirs(
+                    &mut resources,
+                    root,
+                    self.agent(),
+                    [".cline/skills", ".clinerules/skills"],
+                    scope,
+                );
+                discover_md_dir(
+                    &mut resources,
+                    root,
+                    self.agent(),
+                    ResourceKind::Subagent,
+                    ".cline/agents",
+                    scope,
+                );
+                discover_files_dir(
+                    &mut resources,
+                    root,
+                    self.agent(),
+                    ResourceKind::Hook,
+                    ".cline/hooks",
+                    scope,
+                );
+                discover_ext_dir(
+                    &mut resources,
+                    root,
+                    self.agent(),
+                    ResourceKind::Plugin,
+                    ".cline/plugins",
+                    &["cjs", "cts", "js", "json", "mjs", "mts", "ts"],
+                    scope,
+                );
+                push_if_exists(
+                    &mut resources,
+                    root,
+                    self.agent(),
+                    ResourceKind::Plugin,
+                    ".cline/mcp.json",
+                    scope,
+                );
+            }
+            Scope::User => {
+                push_if_exists(
+                    &mut resources,
+                    root,
+                    self.agent(),
+                    ResourceKind::RuleSet,
+                    ".agents/AGENTS.md",
+                    scope,
+                );
+                for dir in [".cline/rules", "Documents/Cline/Rules", "Cline/Rules"] {
+                    discover_ext_dir(
+                        &mut resources,
+                        root,
+                        self.agent(),
+                        ResourceKind::RuleSet,
+                        dir,
+                        &["md", "txt"],
+                        scope,
+                    );
+                }
+                discover_skill_dirs(
+                    &mut resources,
+                    root,
+                    self.agent(),
+                    [".cline/skills", ".cline/data/settings/skills"],
+                    scope,
+                );
+                for dir in [".cline/agents", ".cline/data/settings/agents"] {
+                    discover_md_dir(
+                        &mut resources,
+                        root,
+                        self.agent(),
+                        ResourceKind::Subagent,
+                        dir,
+                        scope,
+                    );
+                }
+                for dir in [".cline/hooks", "Documents/Cline/Hooks", "Cline/Hooks"] {
+                    discover_files_dir(
+                        &mut resources,
+                        root,
+                        self.agent(),
+                        ResourceKind::Hook,
+                        dir,
+                        scope,
+                    );
+                }
+                for dir in [".cline/plugins", "Documents/Cline/Plugins", "Cline/Plugins"] {
+                    discover_ext_dir(
+                        &mut resources,
+                        root,
+                        self.agent(),
+                        ResourceKind::Plugin,
+                        dir,
+                        &["cjs", "cts", "js", "json", "mjs", "mts", "ts"],
+                        scope,
+                    );
+                }
+                for file in [
+                    ".cline/mcp.json",
+                    ".cline/data/settings/cline_mcp_settings.json",
+                ] {
+                    push_if_exists(
+                        &mut resources,
+                        root,
+                        self.agent(),
+                        ResourceKind::Plugin,
+                        file,
+                        scope,
+                    );
+                }
+            }
+            Scope::All => {}
+        }
+        Ok(resources)
+    }
+
+    fn read(
+        &self,
+        root: &Path,
+        native: &NativeResource,
+    ) -> Result<NormalizedResource, AgentSyncError> {
+        normalize_native(root, native)
+    }
+
+    fn render(
+        &self,
+        resource: &NormalizedResource,
+    ) -> Result<(Vec<RenderedFile>, Vec<Diagnostic>), AgentSyncError> {
+        render_native(resource, Agent::Cline)
     }
 }
 
@@ -438,7 +615,7 @@ fn portable_capabilities(agent: Agent) -> AdapterCapabilities {
         ResourceKind::Hook,
         if matches!(
             agent,
-            Agent::Codex | Agent::Claude | Agent::CursorCli | Agent::OpenCode
+            Agent::Codex | Agent::Claude | Agent::Cline | Agent::CursorCli | Agent::OpenCode
         ) {
             SupportLevel::Partial
         } else {
@@ -570,8 +747,42 @@ fn discover_ext_dir(
                     {
                         continue;
                     }
+                    if agent == Agent::Cline
+                        && kind == ResourceKind::Plugin
+                        && is_agentsync_generated_cline_hook_plugin(path)
+                    {
+                        continue;
+                    }
                     resources.push(native(agent, kind, &rel.to_string_lossy(), scope));
                 }
+            }
+        }
+    }
+}
+
+fn discover_files_dir(
+    resources: &mut Vec<NativeResource>,
+    root: &Path,
+    agent: Agent,
+    kind: ResourceKind,
+    dir: &str,
+    scope: Scope,
+) {
+    let abs = root.join(dir);
+    if !abs.exists() {
+        return;
+    }
+    for entry in WalkDir::new(abs).into_iter().flatten() {
+        if entry.file_type().is_file() {
+            let path = entry.path();
+            if agent == Agent::Cline
+                && kind == ResourceKind::Hook
+                && is_agentsync_generated_cline_hook_plugin(path)
+            {
+                continue;
+            }
+            if let Ok(rel) = path.strip_prefix(root) {
+                resources.push(native(agent, kind, &rel.to_string_lossy(), scope));
             }
         }
     }
@@ -583,6 +794,18 @@ fn is_agentsync_generated_opencode_hook_plugin(path: &Path) -> bool {
         .is_some_and(|name| name == "agentsync-hooks.js")
         && fs::read_to_string(path).is_ok_and(|raw| {
             raw.starts_with("// Generated by AgentSync from Codex/Claude/Cursor hook config.")
+                || raw.starts_with(
+                    "// Generated by AgentSync from Codex/Claude/Cline/Cursor hook config.",
+                )
+        })
+}
+
+fn is_agentsync_generated_cline_hook_plugin(path: &Path) -> bool {
+    path.file_name()
+        .and_then(|name| name.to_str())
+        .is_some_and(|name| name == "agentsync-hooks.js")
+        && fs::read_to_string(path).is_ok_and(|raw| {
+            raw.starts_with("// Generated by AgentSync from Codex/Claude/Cline/Cursor hook config.")
         })
 }
 
@@ -1008,7 +1231,7 @@ fn normalize_subagent(
     );
     let tools = normalize_tool_policy(&frontmatter);
     let permissions = frontmatter_object(&frontmatter, &["permissions", "permission"]);
-    let model = frontmatter_string(&frontmatter, &["model"]);
+    let model = frontmatter_string(&frontmatter, &["model", "modelId"]);
     let effort = frontmatter_string(&frontmatter, &["effort"])
         .or_else(|| frontmatter_nested_string(&frontmatter, "config", "effort"));
     let mode = frontmatter_string(&frontmatter, &["mode"]);
@@ -1441,7 +1664,7 @@ fn blocked_behavior(root: &Path, native: &NativeResource) -> NormalizedResource 
         message: if native.kind == ResourceKind::Hook
             && matches!(
                 native.agent,
-                Agent::Codex | Agent::Claude | Agent::CursorCli
+                Agent::Codex | Agent::Claude | Agent::Cline | Agent::CursorCli
             ) {
             "hook resource is partially supported; unsupported entries remain report-only"
                 .to_string()
@@ -1468,7 +1691,7 @@ fn blocked_behavior(root: &Path, native: &NativeResource) -> NormalizedResource 
     let support = if native.kind == ResourceKind::Hook
         && matches!(
             native.agent,
-            Agent::Codex | Agent::Claude | Agent::CursorCli
+            Agent::Codex | Agent::Claude | Agent::Cline | Agent::CursorCli
         )
         && native_extensions.contains_key("behavior.fields")
     {
@@ -1498,6 +1721,10 @@ fn add_behavior_diagnostics(
     native_extensions: &mut BTreeMap<String, Value>,
     diagnostics: &mut Vec<Diagnostic>,
 ) {
+    if native.agent == Agent::Cline && native.kind == ResourceKind::Hook {
+        add_cline_file_hook_diagnostics(native, native_extensions, diagnostics);
+        return;
+    }
     let keys = match (native.agent, native.kind) {
         (Agent::Codex | Agent::Claude | Agent::CursorCli, ResourceKind::Hook) => &["hooks"][..],
         (Agent::Claude, ResourceKind::Permission) => &["permissions"][..],
@@ -1537,6 +1764,67 @@ fn add_behavior_diagnostics(
     );
     for (key, field) in fields {
         add_behavior_field_diagnostics(native, &key, &field, diagnostics);
+    }
+}
+
+fn add_cline_file_hook_diagnostics(
+    native: &NativeResource,
+    native_extensions: &mut BTreeMap<String, Value>,
+    diagnostics: &mut Vec<Diagnostic>,
+) {
+    let Some(event) = native
+        .path
+        .file_stem()
+        .and_then(|stem| stem.to_str())
+        .and_then(cline_file_hook_event)
+    else {
+        diagnostics.push(behavior_diagnostic(
+            native,
+            &format!(
+                "hook.{}: blocked unsupported Cline file hook event",
+                native.path.display()
+            ),
+        ));
+        return;
+    };
+
+    let mut handler = serde_json::Map::new();
+    handler.insert("type".to_string(), Value::String("command".to_string()));
+    handler.insert(
+        "command".to_string(),
+        Value::String(native.path.to_string_lossy().to_string()),
+    );
+    let mut group = serde_json::Map::new();
+    group.insert(
+        "hooks".to_string(),
+        Value::Array(vec![Value::Object(handler)]),
+    );
+    let mut hooks = serde_json::Map::new();
+    hooks.insert(event.to_string(), Value::Array(vec![Value::Object(group)]));
+    let mut fields = serde_json::Map::new();
+    fields.insert("hooks".to_string(), Value::Object(hooks));
+
+    native_extensions.insert(
+        "behavior.kind".to_string(),
+        Value::String(native.kind.as_str().to_string()),
+    );
+    native_extensions.insert("behavior.fields".to_string(), Value::Object(fields));
+    diagnostics.push(behavior_diagnostic(
+        native,
+        &format!("hook.{event}: Cline file hook requires compatibility mapping"),
+    ));
+}
+
+fn cline_file_hook_event(stem: &str) -> Option<&'static str> {
+    match stem {
+        "PreToolUse" => Some("PreToolUse"),
+        "PostToolUse" => Some("PostToolUse"),
+        "UserPromptSubmit" => Some("UserPromptSubmit"),
+        "TaskStart" => Some("TaskStart"),
+        "TaskResume" => Some("TaskResume"),
+        "TaskComplete" => Some("TaskComplete"),
+        "TaskError" => Some("TaskError"),
+        _ => None,
     }
 }
 
@@ -1640,6 +1928,7 @@ fn unsupported_subagent_frontmatter_extensions(
         "name",
         "description",
         "model",
+        "modelId",
         "effort",
         "tools",
         "permissions",
@@ -1784,6 +2073,7 @@ fn render_rules(
     let path = match target {
         Agent::Codex | Agent::OpenCode => PathBuf::from("AGENTS.md"),
         Agent::Claude => PathBuf::from("CLAUDE.md"),
+        Agent::Cline => PathBuf::from(".clinerules/agentsync.md"),
         Agent::CursorCli => PathBuf::from(".cursor/rules/agentsync.md"),
     };
     Ok((
@@ -1806,6 +2096,7 @@ fn render_skill(
     let base = match target {
         Agent::Codex => PathBuf::from(".codex/skills"),
         Agent::Claude => PathBuf::from(".claude/skills"),
+        Agent::Cline => PathBuf::from(".cline/skills"),
         Agent::CursorCli => PathBuf::from(".cursor/skills"),
         Agent::OpenCode => PathBuf::from(".opencode/skills"),
     };
@@ -1862,6 +2153,7 @@ fn render_subagent(
         .ok_or_else(|| AgentSyncError::Adapter("missing subagent body".to_string()))?;
     match target {
         Agent::Claude => render_markdown_subagent(subagent, PathBuf::from(".claude/agents"), false),
+        Agent::Cline => render_cline_subagent(subagent),
         Agent::OpenCode => {
             render_markdown_subagent(subagent, PathBuf::from(".opencode/agents"), true)
         }
@@ -1910,6 +2202,42 @@ fn render_markdown_subagent(
     Ok((
         vec![RenderedFile {
             path: base.join(format!("{}.md", subagent.name)),
+            contents,
+        }],
+        Vec::new(),
+    ))
+}
+
+fn render_cline_subagent(
+    subagent: &Subagent,
+) -> Result<(Vec<RenderedFile>, Vec<Diagnostic>), AgentSyncError> {
+    let mut frontmatter = BTreeMap::new();
+    frontmatter.insert("name".to_string(), Value::String(subagent.name.clone()));
+    if let Some(description) = &subagent.description {
+        frontmatter.insert(
+            "description".to_string(),
+            Value::String(description.clone()),
+        );
+    }
+    if let Some(model) = &subagent.model {
+        frontmatter.insert("modelId".to_string(), Value::String(model.clone()));
+    }
+    let mut contents = String::new();
+    contents.push_str("---\n");
+    for line in serde_yaml::to_string(&frontmatter)
+        .map_err(|error| AgentSyncError::Adapter(error.to_string()))?
+        .lines()
+    {
+        if line != "---" {
+            contents.push_str(line);
+            contents.push('\n');
+        }
+    }
+    contents.push_str("---\n");
+    contents.push_str(&subagent.instructions);
+    Ok((
+        vec![RenderedFile {
+            path: PathBuf::from(".cline/agents").join(format!("{}.md", subagent.name)),
             contents,
         }],
         Vec::new(),
@@ -2016,13 +2344,17 @@ fn render_hook(
     if !is_direct_hook_agent(resource.source_agent)
         || !matches!(
             target,
-            Agent::Codex | Agent::Claude | Agent::CursorCli | Agent::OpenCode
+            Agent::Codex | Agent::Claude | Agent::Cline | Agent::CursorCli | Agent::OpenCode
         )
     {
         return Err(AgentSyncError::InvalidArgument(
-            "hook rendering is currently supported from Codex, Claude, or Cursor hooks to supported hook targets"
+            "hook rendering is currently supported from Codex, Claude, Cline, or Cursor hooks to supported hook targets"
                 .to_string(),
         ));
+    }
+
+    if target == Agent::Cline {
+        return render_cline_hook(resource);
     }
 
     if target == Agent::OpenCode {
@@ -2077,6 +2409,15 @@ fn render_hook(
                         target,
                         &format!("{}: {warning}", entry.location),
                     ));
+                }
+                if resource.source_agent == Agent::Cline {
+                    if let Some(command) = handler
+                        .as_object()
+                        .and_then(|object| object.get("command"))
+                        .and_then(Value::as_str)
+                    {
+                        handler = render_cline_source_hook_handler(command, &entry.event, target);
+                    }
                 }
                 if target == Agent::CursorCli {
                     if let Some(matcher) = matcher.clone() {
@@ -2136,22 +2477,33 @@ fn render_hook(
         ),
     ));
 
+    let mut files = Vec::new();
     let contents = if target == Agent::CursorCli {
         render_cursor_hook_contents(cursor_hooks)?
     } else {
         render_nested_hook_contents(nested_hooks)?
     };
-    Ok((
-        vec![RenderedFile {
-            path: hook_target_path(target),
-            contents,
-        }],
-        diagnostics,
-    ))
+    files.push(RenderedFile {
+        path: hook_target_path(target),
+        contents,
+    });
+    if resource.source_agent == Agent::Cline {
+        files.extend(render_cline_source_hook_shims(resource, target));
+    }
+    Ok((files, diagnostics))
 }
 
 #[derive(Debug)]
 struct OpenCodeHookEntry {
+    event: String,
+    tools: Option<Vec<String>>,
+    command: String,
+    timeout: Option<u64>,
+    location: String,
+}
+
+#[derive(Debug)]
+struct ClineHookEntry {
     event: String,
     tools: Option<Vec<String>>,
     command: String,
@@ -2246,6 +2598,18 @@ fn render_opencode_hook(
             }
         };
 
+        let command = if resource.source_agent == Agent::Cline {
+            OpenCodeHookCommand {
+                command: format!(
+                    "bash {}",
+                    cline_source_hook_shim_path(Agent::OpenCode, &entry.event).display()
+                ),
+                timeout: command.timeout,
+            }
+        } else {
+            command
+        };
+
         rendered_entries.push(OpenCodeHookEntry {
             event: target_event,
             tools: matcher.map(|matcher| {
@@ -2284,10 +2648,145 @@ fn render_opencode_hook(
         "hook.render: OpenCode shim reuses commands, passes adapted JSON on stdin, and maps nonzero exit or decision:block output to plugin errors",
     ));
 
+    let mut files = vec![RenderedFile {
+        path: hook_target_path(Agent::OpenCode),
+        contents: render_opencode_hook_plugin(&rendered_entries)?,
+    }];
+    if resource.source_agent == Agent::Cline {
+        files.extend(render_cline_source_hook_shims(resource, Agent::OpenCode));
+    }
+
+    Ok((files, diagnostics))
+}
+
+fn render_cline_hook(
+    resource: &NormalizedResource,
+) -> Result<(Vec<RenderedFile>, Vec<Diagnostic>), AgentSyncError> {
+    let (entries, mut diagnostics, mut omitted_entries) = collect_hook_entries(resource)?;
+    let mut rendered_entries = Vec::new();
+
+    for entry in entries {
+        let Some(target_event) =
+            render_hook_event_name(&entry.event, resource.source_agent, Agent::Cline)
+        else {
+            omitted_entries += 1;
+            diagnostics.push(hook_render_diagnostic(
+                resource,
+                Agent::Cline,
+                &format!(
+                    "hook.{}: report-only; no Cline runtime hook mapping",
+                    entry.event
+                ),
+            ));
+            continue;
+        };
+
+        let matcher = match entry.matcher.as_deref() {
+            Some(matcher) => {
+                match render_hook_matcher(matcher, resource.source_agent, Agent::Cline) {
+                    Ok(matcher) => matcher,
+                    Err(message) => {
+                        omitted_entries += 1;
+                        diagnostics.push(hook_render_diagnostic(
+                            resource,
+                            Agent::Cline,
+                            &format!("{}: {message}", entry.location),
+                        ));
+                        continue;
+                    }
+                }
+            }
+            None => None,
+        };
+
+        if !is_cline_tool_event(&target_event) && matcher.as_deref().is_some_and(|m| !m.is_empty())
+        {
+            omitted_entries += 1;
+            diagnostics.push(hook_render_diagnostic(
+                resource,
+                Agent::Cline,
+                &format!(
+                    "{}: omitted matcher because Cline runtime hook {target_event} is not a tool hook",
+                    entry.location
+                ),
+            ));
+            continue;
+        }
+
+        let command = match render_cline_hook_command(&entry.handler) {
+            Ok((Some(command), warnings)) => {
+                for warning in warnings {
+                    omitted_entries += 1;
+                    diagnostics.push(hook_render_diagnostic(
+                        resource,
+                        Agent::Cline,
+                        &format!("{}: {warning}", entry.location),
+                    ));
+                }
+                command
+            }
+            Ok((None, _)) => {
+                omitted_entries += 1;
+                diagnostics.push(hook_render_diagnostic(
+                    resource,
+                    Agent::Cline,
+                    &format!("{}: omitted unsupported hook handler", entry.location),
+                ));
+                continue;
+            }
+            Err(message) => {
+                omitted_entries += 1;
+                diagnostics.push(hook_render_diagnostic(
+                    resource,
+                    Agent::Cline,
+                    &format!("{}: {message}", entry.location),
+                ));
+                continue;
+            }
+        };
+
+        rendered_entries.push(ClineHookEntry {
+            event: target_event,
+            tools: matcher.map(|matcher| {
+                matcher
+                    .split('|')
+                    .filter(|tool| !tool.trim().is_empty() && *tool != "*")
+                    .map(|tool| tool.trim().to_string())
+                    .collect::<Vec<_>>()
+            }),
+            command: command.command,
+            timeout: command.timeout,
+            location: entry.location,
+        });
+    }
+
+    if rendered_entries.is_empty() {
+        diagnostics.push(hook_render_diagnostic(
+            resource,
+            Agent::Cline,
+            "hook.render: no hook entries had Cline runtime plugin render support",
+        ));
+        return Ok((Vec::new(), diagnostics));
+    }
+
+    diagnostics.push(hook_render_diagnostic(
+        resource,
+        Agent::Cline,
+        &format!(
+            "hook.render: rendered {} command handler(s) to Cline runtime plugin shim; omitted {omitted_entries} unsupported hook item(s)",
+            rendered_entries.len()
+        ),
+    ));
+    diagnostics.push(hook_render_diagnostic(
+        resource,
+        Agent::Cline,
+        "hook.render: Cline shim reuses commands, passes adapted JSON on stdin, and maps blocking output to skip or stop results",
+    ));
+
     Ok((
         vec![RenderedFile {
-            path: hook_target_path(Agent::OpenCode),
-            contents: render_opencode_hook_plugin(&rendered_entries)?,
+            path: hook_target_path(Agent::Cline),
+            contents: render_cline_hook_plugin(&rendered_entries)?,
         }],
         diagnostics,
     ))
@@ -2525,6 +3024,12 @@ struct OpenCodeHookCommand {
     timeout: Option<u64>,
 }
 
+#[derive(Debug)]
+struct ClineHookCommand {
+    command: String,
+    timeout: Option<u64>,
+}
+
 fn render_opencode_hook_command(
     handler: &Value,
 ) -> Result<(Option<OpenCodeHookCommand>, Vec<String>), String> {
@@ -2577,6 +3082,59 @@ fn render_opencode_hook_command(
     ))
 }
 
+fn render_cline_hook_command(
+    handler: &Value,
+) -> Result<(Option<ClineHookCommand>, Vec<String>), String> {
+    let Some(handler) = handler.as_object() else {
+        return Err("omitted because handler is not an object".to_string());
+    };
+    let allowed = ["type", "command", "timeout", "statusMessage"];
+    let unsupported = handler
+        .keys()
+        .filter(|key| !allowed.contains(&key.as_str()))
+        .cloned()
+        .collect::<BTreeSet<_>>();
+    if !unsupported.is_empty() {
+        return Err(format!(
+            "omitted unsupported handler fields: {}",
+            unsupported.into_iter().collect::<Vec<_>>().join(", ")
+        ));
+    }
+    if let Some(handler_type) = handler.get("type") {
+        if handler_type.as_str() != Some("command") {
+            return Ok((None, Vec::new()));
+        }
+    }
+    let Some(command) = handler.get("command").and_then(Value::as_str) else {
+        return Err("omitted because command handler is missing command".to_string());
+    };
+
+    let timeout = match handler.get("timeout") {
+        Some(timeout) if timeout.is_u64() => timeout.as_u64(),
+        Some(_) => return Err("omitted because timeout is not an unsigned number".to_string()),
+        None => None,
+    };
+
+    let mut warnings = Vec::new();
+    if let Some(status_message) = handler.get("statusMessage") {
+        if !status_message.is_string() {
+            return Err("omitted because statusMessage is not a string".to_string());
+        }
+        warnings.push(
+            "omitted statusMessage because Cline runtime plugin shims do not support it"
+                .to_string(),
+        );
+    }
+
+    Ok((
+        Some(ClineHookCommand {
+            command: command.to_string(),
+            timeout,
+        }),
+        warnings,
+    ))
+}
+
 fn render_opencode_hook_plugin(entries: &[OpenCodeHookEntry]) -> Result<String, AgentSyncError> {
     let entries = entries
         .iter()
@@ -2606,7 +3164,7 @@ fn render_opencode_hook_plugin(entries: &[OpenCodeHookEntry]) -> Result<String, 
         .map_err(|error| AgentSyncError::Adapter(error.to_string()))?;
 
     Ok(format!(
-        r#"// Generated by AgentSync from Codex/Claude/Cursor hook config.
+        r#"// Generated by AgentSync from Codex/Claude/Cline/Cursor hook config.
 // OpenCode auto-loads local plugins from .opencode/plugins/.
 import {{ spawn }} from "node:child_process";
 
@@ -2738,12 +3296,178 @@ function applyHookDecision(entry, stdout, payload) {{
     ))
 }
 
+fn render_cline_hook_plugin(entries: &[ClineHookEntry]) -> Result<String, AgentSyncError> {
+    let entries = entries
+        .iter()
+        .map(|entry| {
+            let mut object = serde_json::Map::new();
+            object.insert("event".to_string(), Value::String(entry.event.clone()));
+            object.insert("command".to_string(), Value::String(entry.command.clone()));
+            object.insert(
+                "location".to_string(),
+                Value::String(entry.location.clone()),
+            );
+            if let Some(timeout) = entry.timeout {
+                object.insert("timeoutSeconds".to_string(), Value::Number(timeout.into()));
+            }
+            if let Some(tools) = &entry.tools {
+                if !tools.is_empty() {
+                    object.insert(
+                        "tools".to_string(),
+                        Value::Array(tools.iter().cloned().map(Value::String).collect()),
+                    );
+                }
+            }
+            Value::Object(object)
+        })
+        .collect::<Vec<_>>();
+    let entries = serde_json::to_string_pretty(&Value::Array(entries))
+        .map_err(|error| AgentSyncError::Adapter(error.to_string()))?;
+
+    Ok(format!(
+        r#"// Generated by AgentSync from Codex/Claude/Cline/Cursor hook config.
+// Cline CLI auto-loads project plugins from .cline/plugins/.
+import {{ spawn }} from "node:child_process";
+
+const AGENTSYNC_HOOKS = {entries};
+
+export const AgentSyncHooks = {{
+  name: "agentsync-hooks",
+  manifest: {{
+    capabilities: ["hooks"],
+  }},
+  hooks: {{
+    async beforeRun(context) {{
+      return await runAgentSyncHooks("beforeRun", context, undefined);
+    }},
+    async afterRun(context) {{
+      return await runAgentSyncHooks("afterRun", context, undefined);
+    }},
+    async beforeTool(context) {{
+      const toolName = getToolName(context);
+      return await runAgentSyncHooks("beforeTool", context, toolName);
+    }},
+    async afterTool(context) {{
+      const toolName = getToolName(context);
+      return await runAgentSyncHooks("afterTool", context, toolName);
+    }},
+  }},
+}};
+
+export default AgentSyncHooks;
+
+async function runAgentSyncHooks(eventName, context, toolName) {{
+  for (const entry of AGENTSYNC_HOOKS) {{
+    if (entry.event !== eventName) continue;
+    if (entry.tools?.length) {{
+      if (!toolName || !entry.tools.includes(toolName)) continue;
+    }}
+    const result = await runCommand(entry, buildHookPayload(eventName, context, toolName));
+    if (result) return result;
+  }}
+  return undefined;
+}}
+
+function getToolName(context) {{
+  const tool = context?.tool;
+  return tool?.name ?? context?.toolName ?? context?.name ?? context?.tool;
+}}
+
+function buildHookPayload(eventName, context, toolName) {{
+  return {{
+    hook_event_name: eventName,
+    session_id: context?.sessionId ?? context?.sessionID ?? context?.runId,
+    tool_name: toolName,
+    tool_input: context?.input ?? context?.args,
+    tool_output: context?.result ?? context?.output,
+    cline: context,
+  }};
+}}
+
+async function runCommand(entry, payload) {{
+  return await new Promise((resolve, reject) => {{
+    const child = spawn(entry.command, {{
+      cwd: process.cwd(),
+      env: process.env,
+      shell: true,
+      stdio: ["pipe", "pipe", "pipe"],
+    }});
+    let stdout = "";
+    let stderr = "";
+    let timedOut = false;
+    const timer = Number.isInteger(entry.timeoutSeconds)
+      ? setTimeout(() => {{
+          timedOut = true;
+          child.kill("SIGTERM");
+        }}, entry.timeoutSeconds * 1000)
+      : undefined;
+
+    child.stdout.on("data", (chunk) => {{
+      stdout += chunk.toString();
+    }});
+    child.stderr.on("data", (chunk) => {{
+      stderr += chunk.toString();
+    }});
+    child.on("error", (error) => {{
+      if (timer) clearTimeout(timer);
+      reject(error);
+    }});
+    child.on("close", (code) => {{
+      if (timer) clearTimeout(timer);
+      if (timedOut) {{
+        reject(new Error(`AgentSync hook ${{entry.location}} timed out after ${{entry.timeoutSeconds}}s`));
+        return;
+      }}
+      if (code !== 0) {{
+        reject(new Error(stderr.trim() || stdout.trim() || `AgentSync hook ${{entry.location}} exited with code ${{code}}`));
+        return;
+      }}
+      try {{
+        resolve(hookDecision(entry, stdout));
+      }} catch (error) {{
+        reject(error);
+      }}
+    }});
+    child.stdin.end(JSON.stringify(payload));
+  }});
+}}
+
+function hookDecision(entry, stdout) {{
+  const text = stdout.trim();
+  if (!text) return undefined;
+  let message;
+  try {{
+    message = JSON.parse(text);
+  }} catch {{
+    return undefined;
+  }}
+  const decision = message?.decision
+    ?? (message?.block === true ? "block" : undefined)
+    ?? (message?.deny === true ? "deny" : undefined);
+  const reason = message?.reason || message?.message || `AgentSync hook ${{entry.location}} blocked execution`;
+  if (entry.event === "beforeTool") {{
+    if (decision === "block" || decision === "deny" || decision === "skip") {{
+      return {{ skip: true, reason }};
+    }}
+  }}
+  if (decision === "block" || decision === "deny" || decision === "stop") {{
+    return {{ stop: true, reason }};
+  }}
+  return undefined;
+}}
+"#
+    ))
+}
+
 fn is_direct_hook_agent(agent: Agent) -> bool {
-    matches!(agent, Agent::Codex | Agent::Claude | Agent::CursorCli)
+    matches!(
+        agent,
+        Agent::Codex | Agent::Claude | Agent::Cline | Agent::CursorCli
+    )
 }
 
 fn render_hook_event_name(event: &str, source: Agent, target: Agent) -> Option<String> {
-    if source == target {
+    if source == target && target != Agent::Cline {
         return Some(event.to_string());
     }
     match (source, target, event) {
@@ -2781,6 +3505,23 @@ fn render_hook_event_name(event: &str, source: Agent, target: Agent) -> Option<S
             Some("subagentStop".to_string())
         }
         (Agent::Codex | Agent::Claude, Agent::CursorCli, "Stop") => Some("stop".to_string()),
+        (Agent::Codex | Agent::Claude, Agent::Cline, "PreToolUse")
+        | (Agent::CursorCli, Agent::Cline, "preToolUse")
+        | (Agent::Cline, Agent::Cline, "PreToolUse") => Some("beforeTool".to_string()),
+        (Agent::Codex | Agent::Claude, Agent::Cline, "PostToolUse")
+        | (Agent::CursorCli, Agent::Cline, "postToolUse")
+        | (Agent::Cline, Agent::Cline, "PostToolUse") => Some("afterTool".to_string()),
+        (Agent::Codex | Agent::Claude, Agent::Cline, "SessionStart")
+        | (Agent::Codex | Agent::Claude, Agent::Cline, "UserPromptSubmit")
+        | (Agent::CursorCli, Agent::Cline, "sessionStart")
+        | (Agent::CursorCli, Agent::Cline, "beforeSubmitPrompt")
+        | (Agent::Cline, Agent::Cline, "TaskStart")
+        | (Agent::Cline, Agent::Cline, "TaskResume")
+        | (Agent::Cline, Agent::Cline, "UserPromptSubmit") => Some("beforeRun".to_string()),
+        (Agent::Codex | Agent::Claude, Agent::Cline, "Stop")
+        | (Agent::CursorCli, Agent::Cline, "stop")
+        | (Agent::Cline, Agent::Cline, "TaskComplete")
+        | (Agent::Cline, Agent::Cline, "TaskError") => Some("afterRun".to_string()),
         (Agent::CursorCli, Agent::Codex | Agent::Claude, "preToolUse") => {
             Some("PreToolUse".to_string())
         }
@@ -2803,6 +3544,30 @@ fn render_hook_event_name(event: &str, source: Agent, target: Agent) -> Option<S
             Some("SubagentStop".to_string())
         }
         (Agent::CursorCli, Agent::Codex | Agent::Claude, "stop") => Some("Stop".to_string()),
+        (Agent::Cline, Agent::Codex | Agent::Claude, "PreToolUse") => {
+            Some("PreToolUse".to_string())
+        }
+        (Agent::Cline, Agent::Codex | Agent::Claude, "PostToolUse") => {
+            Some("PostToolUse".to_string())
+        }
+        (Agent::Cline, Agent::Codex | Agent::Claude, "TaskStart")
+        | (Agent::Cline, Agent::Codex | Agent::Claude, "TaskResume") => {
+            Some("SessionStart".to_string())
+        }
+        (Agent::Cline, Agent::Codex | Agent::Claude, "UserPromptSubmit") => {
+            Some("UserPromptSubmit".to_string())
+        }
+        (Agent::Cline, Agent::Codex | Agent::Claude, "TaskComplete")
+        | (Agent::Cline, Agent::Codex | Agent::Claude, "TaskError") => Some("Stop".to_string()),
+        (Agent::Cline, Agent::CursorCli, "PreToolUse") => Some("preToolUse".to_string()),
+        (Agent::Cline, Agent::CursorCli, "PostToolUse") => Some("postToolUse".to_string()),
+        (Agent::Cline, Agent::CursorCli, "TaskStart")
+        | (Agent::Cline, Agent::CursorCli, "TaskResume") => Some("sessionStart".to_string()),
+        (Agent::Cline, Agent::CursorCli, "UserPromptSubmit") => {
+            Some("beforeSubmitPrompt".to_string())
+        }
+        (Agent::Cline, Agent::CursorCli, "TaskComplete")
+        | (Agent::Cline, Agent::CursorCli, "TaskError") => Some("stop".to_string()),
         (Agent::Codex | Agent::Claude, Agent::OpenCode, "PreToolUse")
         | (Agent::CursorCli, Agent::OpenCode, "preToolUse") => {
             Some("tool.execute.before".to_string())
@@ -2825,12 +3590,23 @@ fn render_hook_event_name(event: &str, source: Agent, target: Agent) -> Option<S
         (Agent::Codex | Agent::Claude, Agent::OpenCode, "PostCompact") => {
             Some("session.compacted".to_string())
         }
+        (Agent::Cline, Agent::OpenCode, "PreToolUse") => Some("tool.execute.before".to_string()),
+        (Agent::Cline, Agent::OpenCode, "PostToolUse") => Some("tool.execute.after".to_string()),
+        (Agent::Cline, Agent::OpenCode, "TaskStart")
+        | (Agent::Cline, Agent::OpenCode, "TaskResume")
+        | (Agent::Cline, Agent::OpenCode, "UserPromptSubmit") => {
+            Some("session.created".to_string())
+        }
         _ => None,
     }
 }
 
 fn is_opencode_tool_event(event: &str) -> bool {
     matches!(event, "tool.execute.before" | "tool.execute.after")
+}
+
+fn is_cline_tool_event(event: &str) -> bool {
+    matches!(event, "beforeTool" | "afterTool")
 }
 
 fn render_hook_matcher(
@@ -2905,6 +3681,45 @@ fn render_hook_matcher_token(token: &str, source: Agent, target: Agent) -> Optio
         (Agent::CursorCli, Agent::Claude, "Write") => Some("Write|Edit|MultiEdit".to_string()),
         (Agent::CursorCli, Agent::Codex, "Task") => Some("spawn_agent|Agent".to_string()),
         (Agent::CursorCli, Agent::Claude, "Task") => Some("Agent".to_string()),
+        (
+            Agent::Codex | Agent::Claude | Agent::CursorCli,
+            Agent::Cline,
+            "Bash" | "exec_command" | "Shell",
+        ) => Some("run_commands".to_string()),
+        (Agent::Codex | Agent::Claude | Agent::CursorCli, Agent::Cline, "Read") => {
+            Some("read_files".to_string())
+        }
+        (Agent::Codex | Agent::Claude | Agent::CursorCli, Agent::Cline, "Grep") => {
+            Some("search_files".to_string())
+        }
+        (Agent::Codex | Agent::Claude | Agent::CursorCli, Agent::Cline, "Glob") => {
+            Some("list_files".to_string())
+        }
+        (
+            Agent::Codex | Agent::Claude | Agent::CursorCli,
+            Agent::Cline,
+            "apply_patch" | "Write" | "Edit" | "MultiEdit",
+        ) => Some("editor|write_file|apply_patch".to_string()),
+        (Agent::Cline, Agent::Codex, "run_commands") => Some("Bash|exec_command".to_string()),
+        (Agent::Cline, Agent::Claude, "run_commands") => Some("Bash".to_string()),
+        (Agent::Cline, Agent::CursorCli, "run_commands") => Some("Shell".to_string()),
+        (Agent::Cline, Agent::Codex | Agent::Claude | Agent::CursorCli, "read_files") => {
+            Some("Read".to_string())
+        }
+        (Agent::Cline, Agent::Codex | Agent::Claude | Agent::CursorCli, "search_files") => {
+            Some("Grep".to_string())
+        }
+        (Agent::Cline, Agent::Codex | Agent::Claude, "list_files") => Some("Glob".to_string()),
+        (Agent::Cline, Agent::CursorCli, "list_files") => Some("Read".to_string()),
+        (Agent::Cline, Agent::Codex, "editor" | "write_file" | "apply_patch") => {
+            Some("apply_patch|Write|Edit".to_string())
+        }
+        (Agent::Cline, Agent::Claude, "editor" | "write_file" | "apply_patch") => {
+            Some("Write|Edit|MultiEdit".to_string())
+        }
+        (Agent::Cline, Agent::CursorCli, "editor" | "write_file" | "apply_patch") => {
+            Some("Write".to_string())
+        }
         (Agent::Codex | Agent::Claude | Agent::CursorCli, Agent::OpenCode, "Bash")
         | (Agent::Codex | Agent::Claude | Agent::CursorCli, Agent::OpenCode, "exec_command")
         | (Agent::Codex | Agent::Claude | Agent::CursorCli, Agent::OpenCode, "Shell") => {
@@ -2929,6 +3744,13 @@ fn render_hook_matcher_token(token: &str, source: Agent, target: Agent) -> Optio
         }
         (Agent::Codex | Agent::Claude | Agent::CursorCli, Agent::OpenCode, "WebSearch") => {
             Some("websearch".to_string())
+        }
+        (Agent::Cline, Agent::OpenCode, "run_commands") => Some("bash".to_string()),
+        (Agent::Cline, Agent::OpenCode, "read_files") => Some("read".to_string()),
+        (Agent::Cline, Agent::OpenCode, "search_files") => Some("grep".to_string()),
+        (Agent::Cline, Agent::OpenCode, "list_files") => Some("glob".to_string()),
+        (Agent::Cline, Agent::OpenCode, "editor" | "write_file" | "apply_patch") => {
+            Some("edit|write|apply_patch".to_string())
         }
         (_, Agent::CursorCli, "Read" | "Grep") => Some(token.to_string()),
         (Agent::CursorCli, Agent::Codex | Agent::Claude, "Read" | "Grep") => {
@@ -3015,10 +3837,78 @@ fn render_hook_handler(
     Ok((Some(Value::Object(rendered)), Vec::new()))
 }
 
+fn render_cline_source_hook_handler(_command: &str, event: &str, target: Agent) -> Value {
+    let mut rendered = serde_json::Map::new();
+    rendered.insert("type".to_string(), Value::String("command".to_string()));
+    rendered.insert(
+        "command".to_string(),
+        Value::String(format!(
+            "bash {}",
+            cline_source_hook_shim_path(target, event).display()
+        )),
+    );
+    Value::Object(rendered)
+}
+
+fn render_cline_source_hook_shims(
+    resource: &NormalizedResource,
+    target: Agent,
+) -> Vec<RenderedFile> {
+    let Some(fields) = resource
+        .native_extensions
+        .get("behavior.fields")
+        .and_then(|fields| fields.get("hooks"))
+        .and_then(Value::as_object)
+    else {
+        return Vec::new();
+    };
+
+    let mut files = Vec::new();
+    for (event, groups) in fields {
+        if render_hook_event_name(event, Agent::Cline, target).is_none() {
+            continue;
+        }
+        let Some(command) = groups
+            .as_array()
+            .and_then(|groups| groups.first())
+            .and_then(|group| group.get("hooks"))
+            .and_then(Value::as_array)
+            .and_then(|hooks| hooks.first())
+            .and_then(|handler| handler.get("command"))
+            .and_then(Value::as_str)
+        else {
+            continue;
+        };
+        let path = cline_source_hook_shim_path(target, event);
+        let contents = format!(
+            "#!/usr/bin/env bash\nset -euo pipefail\nSOURCE={}\nif [ ! -f \"$SOURCE\" ]; then\n  echo \"AgentSync Cline hook source not found: $SOURCE\" >&2\n  exit 1\nfi\n\"$SOURCE\"\n",
+            shell_single_quote(command)
+        );
+        files.push(RenderedFile { path, contents });
+    }
+    files
+}
+
+fn cline_source_hook_shim_path(target: Agent, event: &str) -> PathBuf {
+    let file_name = format!("agentsync-cline-{event}.sh");
+    match target {
+        Agent::Codex => PathBuf::from(".codex/hooks").join(file_name),
+        Agent::Claude => PathBuf::from(".claude/hooks").join(file_name),
+        Agent::CursorCli => PathBuf::from(".cursor/hooks").join(file_name),
+        Agent::OpenCode => PathBuf::from(".opencode/hooks").join(file_name),
+        Agent::Cline => PathBuf::from(".cline/hooks").join(file_name),
+    }
+}
+
+fn shell_single_quote(value: &str) -> String {
+    format!("'{}'", value.replace('\'', "'\"'\"'"))
+}
+
 fn hook_target_path(target: Agent) -> PathBuf {
     match target {
         Agent::Codex => PathBuf::from(".codex/hooks.json"),
         Agent::Claude => PathBuf::from(".claude/settings.json"),
+        Agent::Cline => PathBuf::from(".cline/plugins/agentsync-hooks.js"),
         Agent::CursorCli => PathBuf::from(".cursor/hooks.json"),
         Agent::OpenCode => PathBuf::from(".opencode/plugins/agentsync-hooks.js"),
     }
@@ -3215,6 +4105,125 @@ mod tests {
         assert!(resource.diagnostics.iter().any(|diagnostic| diagnostic
             .message
             .contains("hook.preToolUse: executable hook behavior requires compatibility mapping")));
+    }
+
+    #[test]
+    fn cline_adapter_discovers_project_resources_and_behavior() {
+        let dir = tempdir().unwrap();
+        fs::write(dir.path().join("AGENTS.md"), "agents rules\n").unwrap();
+        fs::create_dir_all(dir.path().join(".clinerules/skills/legacy")).unwrap();
+        fs::write(dir.path().join(".clinerules/coding.txt"), "coding\n").unwrap();
+        fs::write(
+            dir.path().join(".clinerules/skills/legacy/SKILL.md"),
+            "---\nname: legacy\n---\nLegacy skill\n",
+        )
+        .unwrap();
+        fs::create_dir_all(dir.path().join(".cline/rules")).unwrap();
+        fs::write(dir.path().join(".cline/rules/testing.md"), "testing\n").unwrap();
+        fs::create_dir_all(dir.path().join(".cline/skills/review")).unwrap();
+        fs::write(
+            dir.path().join(".cline/skills/review/SKILL.md"),
+            "---\nname: review\n---\nReview skill\n",
+        )
+        .unwrap();
+        fs::create_dir_all(dir.path().join(".cline/agents")).unwrap();
+        fs::write(
+            dir.path().join(".cline/agents/reviewer.md"),
+            "---\nname: reviewer\nmodelId: anthropic/claude-sonnet-4-6\n---\nReview.\n",
+        )
+        .unwrap();
+        fs::create_dir_all(dir.path().join(".cline/hooks")).unwrap();
+        fs::write(
+            dir.path().join(".cline/hooks/PreToolUse.sh"),
+            "#!/usr/bin/env bash\n",
+        )
+        .unwrap();
+        fs::create_dir_all(dir.path().join(".cline/plugins")).unwrap();
+        fs::write(
+            dir.path().join(".cline/plugins/audit.ts"),
+            "export default {}\n",
+        )
+        .unwrap();
+        fs::write(
+            dir.path().join(".cline/mcp.json"),
+            r#"{"mcpServers":{"local":{"command":"node"}}}"#,
+        )
+        .unwrap();
+
+        let resources = ClineAdapter.discover(dir.path(), Scope::Project).unwrap();
+
+        assert!(resources
+            .iter()
+            .any(|resource| resource.path == Path::new("AGENTS.md")));
+        assert!(resources
+            .iter()
+            .any(|resource| resource.path == Path::new(".clinerules/coding.txt")));
+        assert!(resources
+            .iter()
+            .any(|resource| resource.path == Path::new(".cline/rules/testing.md")));
+        assert!(resources.iter().any(|resource| {
+            resource.kind == ResourceKind::Skill
+                && resource.path == Path::new(".cline/skills/review/SKILL.md")
+        }));
+        assert!(resources.iter().any(|resource| {
+            resource.kind == ResourceKind::Skill
+                && resource.path == Path::new(".clinerules/skills/legacy/SKILL.md")
+        }));
+        assert!(resources.iter().any(|resource| {
+            resource.kind == ResourceKind::Subagent
+                && resource.path == Path::new(".cline/agents/reviewer.md")
+        }));
+        assert!(resources.iter().any(|resource| {
+            resource.kind == ResourceKind::Hook
+                && resource.path == Path::new(".cline/hooks/PreToolUse.sh")
+        }));
+        assert!(resources.iter().any(|resource| {
+            resource.kind == ResourceKind::Plugin
+                && resource.path == Path::new(".cline/plugins/audit.ts")
+        }));
+        assert!(resources.iter().any(|resource| {
+            resource.kind == ResourceKind::Plugin && resource.path == Path::new(".cline/mcp.json")
+        }));
+
+        let hook = resources
+            .iter()
+            .find(|resource| resource.path == Path::new(".cline/hooks/PreToolUse.sh"))
+            .unwrap();
+        let hook = ClineAdapter.read(dir.path(), hook).unwrap();
+        assert_eq!(hook.support, SupportLevel::Partial);
+        assert_eq!(
+            hook.native_extensions["behavior.fields"]["hooks"]["PreToolUse"][0]["hooks"][0]
+                ["command"],
+            ".cline/hooks/PreToolUse.sh"
+        );
+
+        let agent = resources
+            .iter()
+            .find(|resource| resource.path == Path::new(".cline/agents/reviewer.md"))
+            .unwrap();
+        let agent = ClineAdapter.read(dir.path(), agent).unwrap();
+        assert_eq!(
+            agent.subagent.as_ref().unwrap().model.as_deref(),
+            Some("anthropic/claude-sonnet-4-6")
+        );
+    }
+
+    #[test]
+    fn cline_generated_hook_plugin_is_not_rediscovered_as_native_plugin() {
+        let dir = tempdir().unwrap();
+        fs::create_dir_all(dir.path().join(".cline/plugins")).unwrap();
+        fs::write(
+            dir.path().join(".cline/plugins/agentsync-hooks.js"),
+            "// Generated by AgentSync from Codex/Claude/Cline/Cursor hook config.\nexport default {}\n",
+        )
+        .unwrap();
+
+        let resources = ClineAdapter.discover(dir.path(), Scope::Project).unwrap();
+
+        assert!(!resources.iter().any(|resource| {
+            resource.kind == ResourceKind::Plugin
+                && resource.path == Path::new(".cline/plugins/agentsync-hooks.js")
+        }));
     }
 
     #[test]

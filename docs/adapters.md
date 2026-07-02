@@ -18,6 +18,11 @@ Each adapter provides:
   hooks, and settings permissions.
 - Codex CLI: `AGENTS.md`, skills, hooks, plugins, subagents, Codex
   customization.
+- Cline CLI: `AGENTS.md`, `.clinerules`, `.cline/rules`, `.cline/skills`,
+  `.clinerules/skills`, `.cline/agents`, `.cline/hooks`, `.cline/plugins`,
+  and `.cline/mcp.json`. Supported hook entries render as generated local
+  plugin shims in `.cline/plugins/agentsync-hooks.js`; Cline file hooks can be
+  used as sources through target-local generated adapter shims.
 - Cursor CLI: CLI-consumed rules in `.cursor/rules`, root `AGENTS.md` /
   `CLAUDE.md` where supported, portable skills, and `.cursor/hooks.json`
   command hooks. This target is not Cursor IDE workspace automation.
