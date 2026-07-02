@@ -40,16 +40,16 @@ AgentSync can:
 Initial target adapter coverage:
 
 Cursor support means **Cursor CLI**. AgentSync targets files the CLI consumes,
-including the shared rules system in `.cursor/rules` and root-level
+including the shared rules system in `.cursor/rules/*.mdc` and root-level
 `AGENTS.md` / `CLAUDE.md`; it does not automate Cursor IDE workspace behavior.
 
 | Resource | Claude Code | Codex CLI | Cline CLI | Cursor CLI | OpenCode |
 | --- | --- | --- | --- | --- | --- |
-| Rules / context | `CLAUDE.md`, `.claude/CLAUDE.md` | `AGENTS.md` | `AGENTS.md`, `.clinerules/`, `.cline/rules/` | Cursor CLI rules, `AGENTS.md` where supported | `AGENTS.md`, `opencode.json` / `opencode.jsonc` instructions |
-| Subagents / custom agents | `.claude/agents/*.md` | Codex subagents | `.cline/agents/*.md` portable presets | blocked until Cursor publishes stable CLI file-format docs | `.opencode/agents/*.md`, `opencode.json` agent config |
-| Skills | `.claude/skills/*/SKILL.md` | Agent Skills / `SKILL.md` folders | `.cline/skills/*/SKILL.md`, `.clinerules/skills/*/SKILL.md` | Agent Skills / `SKILL.md` folders | `.opencode/skills/*/SKILL.md`, `.agents/skills`, Claude-compatible skills |
+| Rules / context | `CLAUDE.md`, `.claude/CLAUDE.md` | `AGENTS.md` | `AGENTS.md`, `.clinerules/`, `.cline/rules/` | `.cursor/rules/*.mdc`, `AGENTS.md`, `CLAUDE.md` | `AGENTS.md`, `CLAUDE.md` fallback, `opencode.json` / `opencode.jsonc` instructions |
+| Subagents / custom agents | `.claude/agents/*.md` | `.codex/agents/*.toml` | `.cline/agents/*.md` portable presets | blocked until Cursor publishes stable CLI file-format docs | `.opencode/agents/*.md`, `.opencode/agent/*.md`, `opencode.json` agent config |
+| Skills | `.claude/skills/*/SKILL.md` | `.agents/skills/*/SKILL.md`, `.codex/skills/*/SKILL.md` | `.cline/skills/*/SKILL.md`, `.clinerules/skills/*/SKILL.md` | `.cursor/skills`, `.agents/skills`, Claude/Codex-compatible skills | `.opencode/skills`, `.opencode/skill`, `.agents/skills`, Claude-compatible skills |
 | Hooks / lifecycle automation | Claude Code hooks in settings (partial direct sync with Codex/Cline/Cursor/OpenCode) | `.codex/hooks.json` (partial direct sync with Claude/Cline/Cursor/OpenCode) | generated `.cline/plugins/agentsync-hooks.js` shims for supported entries; `.cline/hooks/*` discovered as sources | `.cursor/hooks.json` (partial direct sync with Codex/Claude/Cline/OpenCode) | generated `.opencode/plugins/agentsync-hooks.js` shims for supported entries |
-| Commands | Claude skills / legacy commands | planned | planned | `.opencode/commands/*.md`, config commands |
+| Commands | Claude skills / legacy commands | planned | planned | planned | `.opencode/commands/*.md`, `.opencode/command/*.md`, config commands |
 
 Support levels:
 
@@ -354,7 +354,7 @@ Examples:
 - Hook systems vary widely. AgentSync defines the hook equivalence policy in
   `docs/hook-equivalence-policy.md` so hook rendering can handle direct entries
   separately from generated Cline/OpenCode shims and report-only diagnostics.
-- Cursor CLI rules and `AGENTS.md` instructions may overlap but are not always equivalent.
+- Cursor CLI `.mdc` rules and `AGENTS.md` instructions may overlap but are not always equivalent.
 - OpenCode `opencode.json` / `opencode.jsonc` rules are read from literal `instructions` file paths.
   Glob patterns are reported as partial until AgentSync grows deterministic glob expansion.
 - Skills are most portable when they follow the open `SKILL.md` pattern, keep

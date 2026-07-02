@@ -168,8 +168,8 @@ fn sync_from_all_to_all_uses_changed_tracked_target_as_source() {
         "new rules\n"
     );
     assert_eq!(
-        fs::read_to_string(dir.path().join(".cursor/rules/agentsync.md")).unwrap(),
-        "new rules\n"
+        fs::read_to_string(dir.path().join(".cursor/rules/agentsync.mdc")).unwrap(),
+        "---\nalwaysApply: true\n---\nnew rules\n"
     );
 }
 
@@ -201,7 +201,7 @@ fn sync_from_all_blocks_multiple_changed_sources_for_same_resource() {
     );
     let claude_mtime = modified_time(&dir.path().join("CLAUDE.md"));
     write_until_newer(
-        &dir.path().join(".cursor/rules/agentsync.md"),
+        &dir.path().join(".cursor/rules/agentsync.mdc"),
         "cursor rules\n",
         claude_mtime,
     );
@@ -1067,7 +1067,7 @@ fn diff_config_defaults_respect_disabled_subagents_sync() {
     fs::create_dir_all(dir.path().join(".claude/agents")).unwrap();
     fs::write(
         dir.path().join(".claude/agents/reviewer.md"),
-        "---\nname: reviewer\n---\nReview carefully.\n",
+        "---\nname: reviewer\ndescription: Review code\n---\nReview carefully.\n",
     )
     .unwrap();
     fs::write(
@@ -1251,7 +1251,7 @@ fn diff_subagent_returns_rendered_plan() {
     fs::create_dir_all(dir.path().join(".claude/agents")).unwrap();
     fs::write(
         dir.path().join(".claude/agents/reviewer.md"),
-        "---\nname: reviewer\n---\nReview carefully.\n",
+        "---\nname: reviewer\ndescription: Review code\n---\nReview carefully.\n",
     )
     .unwrap();
 
@@ -1283,12 +1283,12 @@ fn diff_named_subagent_only_reports_matching_resource() {
     fs::create_dir_all(dir.path().join(".claude/agents")).unwrap();
     fs::write(
         dir.path().join(".claude/agents/reviewer.md"),
-        "---\nname: reviewer\n---\nReview carefully.\n",
+        "---\nname: reviewer\ndescription: Review code\n---\nReview carefully.\n",
     )
     .unwrap();
     fs::write(
         dir.path().join(".claude/agents/planner.md"),
-        "---\nname: planner\n---\nPlan carefully.\n",
+        "---\nname: planner\ndescription: Plan code\n---\nPlan carefully.\n",
     )
     .unwrap();
 
@@ -1345,7 +1345,7 @@ fn sync_subagent_write_creates_target_and_state() {
     fs::create_dir_all(dir.path().join(".claude/agents")).unwrap();
     fs::write(
         dir.path().join(".claude/agents/reviewer.md"),
-        "---\nname: reviewer\n---\nReview carefully.\n",
+        "---\nname: reviewer\ndescription: Review code\n---\nReview carefully.\n",
     )
     .unwrap();
 

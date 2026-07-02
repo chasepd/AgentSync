@@ -16,17 +16,20 @@ Each adapter provides:
 
 - Claude Code: `CLAUDE.md`, `.claude/agents`, `.claude/skills`, settings
   hooks, and settings permissions.
-- Codex CLI: `AGENTS.md`, skills, hooks, plugins, subagents, Codex
-  customization.
+- Codex CLI: `AGENTS.md`, `.agents/skills`, legacy `.codex/skills`, hooks,
+  plugins, `.codex/agents/*.toml` custom agents, and Codex customization.
 - Cline CLI: `AGENTS.md`, `.clinerules`, `.cline/rules`, `.cline/skills`,
   `.clinerules/skills`, `.cline/agents`, `.cline/hooks`, `.cline/plugins`,
   and `.cline/mcp.json`. Supported hook entries render as generated local
   plugin shims in `.cline/plugins/agentsync-hooks.js`; Cline file hooks can be
   used as sources through target-local generated adapter shims.
-- Cursor CLI: CLI-consumed rules in `.cursor/rules`, root `AGENTS.md` /
-  `CLAUDE.md` where supported, portable skills, and `.cursor/hooks.json`
-  command hooks. This target is not Cursor IDE workspace automation.
-- OpenCode: `AGENTS.md`, `.opencode/agents`, `.opencode/commands`,
-  `.opencode/skills`, `opencode.json` / `opencode.jsonc` instructions, and
-  OpenCode agent/command/plugin/permission config. Supported hook entries render
-  as generated local plugin shims in `.opencode/plugins/agentsync-hooks.js`.
+- Cursor CLI: CLI-consumed `.cursor/rules/*.mdc`, root `AGENTS.md` /
+  `CLAUDE.md`, portable skills from `.cursor/skills`, `.agents/skills`, and
+  Claude/Codex-compatible skill folders, plus `.cursor/hooks.json` command
+  hooks. This target is not Cursor IDE workspace automation.
+- OpenCode: `AGENTS.md`, `.opencode/agents` / `.opencode/agent`,
+  `.opencode/commands` / `.opencode/command`, `.opencode/skills` /
+  `.opencode/skill`, `.agents/skills`, Claude-compatible rules/skills,
+  `opencode.json` / `opencode.jsonc` instructions, and OpenCode
+  agent/command/plugin/permission config. Supported hook entries render as
+  generated local plugin shims in `.opencode/plugins/agentsync-hooks.js`.

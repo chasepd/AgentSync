@@ -2486,7 +2486,7 @@ mod tests {
         assert!(entry
             .targets
             .iter()
-            .any(|target| target.path == Path::new(".cursor/rules/agentsync.md")));
+            .any(|target| target.path == Path::new(".cursor/rules/agentsync.mdc")));
     }
 
     #[test]
@@ -2734,7 +2734,7 @@ mod tests {
         fs::create_dir_all(dir.path().join(".claude/agents")).unwrap();
         fs::write(
             dir.path().join(".claude/agents/reviewer.md"),
-            "---\nname: reviewer\n---\nReview carefully.\n",
+            "---\nname: reviewer\ndescription: Review code\n---\nReview carefully.\n",
         )
         .unwrap();
 
@@ -2751,7 +2751,8 @@ mod tests {
         let rendered = report.actions[0].rendered.as_ref().unwrap();
         assert_eq!(rendered.path, Path::new(".codex/agents/reviewer.toml"));
         assert!(rendered.contents.contains("name = \"reviewer\""));
-        assert!(rendered.contents.contains("instructions = "));
+        assert!(rendered.contents.contains("description = \"Review code\""));
+        assert!(rendered.contents.contains("developer_instructions = "));
         assert!(rendered.contents.contains("Review carefully."));
     }
 

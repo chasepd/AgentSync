@@ -1,5 +1,17 @@
 # Changelog
 
+## Unreleased
+
+- Discover and render current Cursor project rules as `.cursor/rules/*.mdc`
+  with always-on frontmatter for generated targets.
+- Discover Cursor and OpenCode Agent Skills from shared `.agents/skills` and
+  documented compatibility directories.
+- Discover OpenCode singular compatibility directories such as `.opencode/skill`,
+  `.opencode/agent`, `.opencode/command`, and `.opencode/plugin`.
+- Discover Codex custom agents in `.codex/agents/*.toml` and render Codex
+  subagents with `developer_instructions` and `model_reasoning_effort`.
+- Add Claude Code `SessionEnd` to Cursor `sessionEnd` hook compatibility.
+
 ## v0.1.0 MVP
 
 AgentSync v0.1.0 establishes the first safe sync workflow for multi-agent
