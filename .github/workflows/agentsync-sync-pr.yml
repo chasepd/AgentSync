@@ -80,7 +80,7 @@ jobs:
       changed: ${{ steps.changes.outputs.changed }}
       pull-request-url: ${{ steps.pull-request.outputs.url }}
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
         with:
           fetch-depth: 0
           token: ${{ secrets.token || github.token }}
